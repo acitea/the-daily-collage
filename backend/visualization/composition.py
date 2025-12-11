@@ -171,19 +171,44 @@ class TemplateComposer:
             f"Composing visualization for {location} with {len(signal_intensities)} signals"
         )
 
-        # Create image
+        # Create image with gradient-like background
         img = Image.new("RGB", (self.width, self.height), self.bg_color)
         draw = ImageDraw.Draw(img)
+        
+        # Add a subtle gradient by drawing rectangles of slightly different colors
+        # (PIL doesn't have built-in gradients, so we approximate)
+        for y in range(self.height):
+            ratio = y / self.height
+            r = int(245 + (102 - 245) * ratio * 0.15)  # Slight blue tint towards bottom
+            g = int(245 + (155 - 245) * ratio * 0.15)
+            b = int(250 + (201 - 250) * ratio * 0.15)
+            draw.line([(0, y), (self.width, y)], fill=(r, g, b))
 
-        # Draw header with location
-        header_text = f"The Daily Collage: {location}"
-        header_y = 30
-        draw.text(
-            (self.width // 2, header_y),
-            header_text,
-            fill=self.text_color,
-            anchor="mm",
+        # Draw decorative header background
+        header_bg_color = (100, 120, 180)  # Dark blue
+        draw.rectangle(
+            [(0, 0), (self.width, 80)],
+            fill=header_bg_color,
         )
+
+        # Draw location title
+        header_text = f"The Daily Collage • {location.title()}"
+        title_color = (255, 255, 255)
+        try:
+            draw.text(
+                (self.width // 2, 40),
+                header_text,
+                fill=title_color,
+                anchor="mm",
+            )
+        except:
+            # Fallback if font rendering fails
+            draw.text(
+                (self.width // 2, 40),
+                header_text,
+                fill=title_color,
+                anchor="mm",
+            )
 
         # Sort signals by intensity (descending) for better visual hierarchy
         sorted_signals = sorted(
@@ -200,19 +225,20 @@ class TemplateComposer:
             row = idx // cols
 
             x = col * cell_width + cell_width // 2
-            y = header_y + 100 + row * cell_height + cell_height // 2
+            y = 80 + 20 + row * cell_height + cell_height // 2
 
             self._draw_signal_element(
                 draw, signal, (x, y), cell_width - 20
             )
 
         # Add footer with timestamp info
-        footer_y = self.height - 40
-        footer_text = "Updated every 6 hours"
+        footer_y = self.height - 30
+        footer_text = "Updated every 6 hours • Powered by GDELT"
+        footer_color = (120, 120, 140)
         draw.text(
             (self.width // 2, footer_y),
             footer_text,
-            fill=(150, 150, 160),
+            fill=footer_color,
             anchor="mm",
         )
 
