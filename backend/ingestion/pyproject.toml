@@ -1,0 +1,10 @@
+[project]
+name = "the-daily-collage-ingestion"
+version = "0.1.0"
+description = "Handles data ingestion from GDELT"
+requires-python = ">=3.13"
+dependencies = [
+    "gdeltdoc",
+    "polars",
+    "pandas",
+]
