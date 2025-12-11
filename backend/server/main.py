@@ -39,6 +39,8 @@ try:
         VisualizationService,
         SignalIntensity,
     )
+    from utils.classification import classify_articles
+    from ingestion.script import get_news_for_location, normalize_country_input
 except ImportError:
     logger.warning(
         "visualization module not available - running in stub mode"
@@ -257,6 +259,104 @@ async def get_articles_for_location(
         mock_articles = [a for a in mock_articles if a["signal"] == signal]
 
     return JSONResponse(content={"location": location, "articles": mock_articles})
+
+
+@app.get("/api/visualization/gdelt/{location}", tags=["Visualization"])
+async def get_visualization_from_gdelt(
+    location: str = "sweden",
+    force_regenerate: bool = Query(
+        False, description="Force regeneration instead of using cache"
+    ),
+):
+    """
+    Get a visualization based on real GDELT news data.
+
+    This endpoint fetches actual news articles from GDELT, classifies them,
+    and generates a visualization based on real data.
+
+    Args:
+        location: Geographic location (e.g., 'sweden', 'stockholm')
+        force_regenerate: Force regeneration instead of using cache
+
+    Returns:
+        JSON with visualization metadata and image URL
+    """
+    if not viz_service:
+        raise HTTPException(
+            status_code=503, detail="Visualization service not initialized"
+        )
+
+    try:
+        # Normalize location to country code
+        try:
+            country_code = normalize_country_input(location)
+        except ValueError:
+            # Try as-is if not a known country
+            country_code = location.upper()[:2]
+
+        # Fetch real news from GDELT
+        logger.info(f"Fetching GDELT news for {location} ({country_code})")
+        articles_df = get_news_for_location(country_code, max_articles=100)
+
+        if len(articles_df) == 0:
+            logger.warning(f"No GDELT articles found for {location}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No news found for location: {location}",
+            )
+
+        # Classify articles into signals
+        logger.info(f"Classifying {len(articles_df)} articles")
+        classified = classify_articles(articles_df)
+
+        # Aggregate signals
+        signal_dict = {}
+        for article in classified:
+            if article.primary_signal:
+                signal = article.primary_signal.value
+                intensity = article.signals[0].intensity if article.signals else 0
+                if signal not in signal_dict:
+                    signal_dict[signal] = []
+                signal_dict[signal].append(intensity)
+
+        # Convert to SignalIntensity objects
+        signals_for_viz = []
+        for signal_name in sorted(
+            signal_dict.keys(),
+            key=lambda s: sum(signal_dict[s]) / len(signal_dict[s]),
+            reverse=True,
+        ):
+            intensities = signal_dict[signal_name]
+            avg_intensity = sum(intensities) / len(intensities)
+            signals_for_viz.append(SignalIntensity(signal_name, avg_intensity))
+
+        # Generate visualization
+        image_data, metadata = viz_service.generate_or_get(
+            signals_for_viz,
+            location=location,
+            force_regenerate=force_regenerate,
+        )
+
+        return VisualizationResponse(
+            location=location,
+            generated_at=datetime.utcnow().isoformat(),
+            signal_count=len(signals_for_viz),
+            signals=[
+                SignalData(name=s.signal_name, intensity=s.intensity)
+                for s in signals_for_viz
+            ],
+            image_url=f"/api/visualization/{location}/image",
+            cached=not force_regenerate,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching GDELT data: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing GDELT data: {str(e)}",
+        )
 
 
 @app.get("/api/supported-locations", tags=["Metadata"])

@@ -57,9 +57,11 @@ def get_news_for_location(country_code: str, max_articles: int = 250) -> pl.Data
         gd = GdeltDoc()
 
         # Define filters for the GDELT API query
+        # Get news from the last 1 week (timespan format: e.g., "1w" for 1 week)
         filters = Filters(
-            source_country=country_code,
+            country=country_code,
             num_records=max_articles,
+            timespan="1w",  # Get news from the last week
         )
 
         # Search for articles (returns pandas DataFrame)
