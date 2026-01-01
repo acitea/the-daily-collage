@@ -8,12 +8,13 @@ Tests the full data flow: ingestion -> classification -> visualization.
 import sys
 from pathlib import Path
 
-# Add backend to path
-backend_path = Path(__file__).parent / "backend"
-sys.path.insert(0, str(backend_path))
+# Ensure project root is on path for absolute imports
+PROJECT_ROOT = Path(__file__).parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.classification import classify_articles, SignalCategory
-from visualization.composition import TemplateComposer, SignalIntensity
+from ml.utils.classification import classify_articles, SignalCategory
+from backend.visualization.composition import TemplateComposer, SignalIntensity
 import polars as pl
 
 

@@ -2,109 +2,103 @@
 
 ## Project Overview
 
-**The Daily Collage** is a proof-of-concept system that transforms news headlines from geographic locations (primarily Sweden) into cartoonish visualizations capturing the collective "vibe" of current events. The system updates every 6 hours.
+**The Daily Collage** is a proof-of-concept system that transforms real-time news from geographic locations into a clickable, cartoonish visualization. The system captures the collective "vibe" of a city by ingesting news signals, composing a scene, and polishing it with Generative AI. The system updates every 6 hours per location.
 
-**Core Value**: Users glance at one generated image to understand location sentiment and major events, then drill down to source articles if interested.
+**Core Value**: A "glanceable" understanding of a city's mood. Users see a single image representing the current vibe and can click on specific elements (e.g., a fire, a traffic jam) to read the underlying news articles.
 
 ## Architecture Overview
 
-The codebase is organized into modular Python components following a data pipeline pattern:
+The system architecture has evolved to a **Hybrid Composition** model with a **Feature Store** backbone.
 
 ```
-backend/
-├── ingestion/        # GDELT API polling → news fetching
-├── server/           # FastAPI REST API for visualization requests
-├── utils/            # Shared utilities (TBD expansion)
-└── models/           # ML models (under development)
+project_root/
+├── backend/
+│   ├── visualization/    # Layout composition (Pillow) + AI Polish (Stability)
+│   ├── server/           # FastAPI for serving vibes & metadata
+│   ├── utils/            # Any relevant or useful scripts for one-off or routinely used
+│   └── assets/           # Sticker PNGs and overlays
+├── ml/                   # Hopsworks feature definitions & model logic
+│   ├── data/             # any data needed for training
+│   ├── notebooks/        # notebooks for experimentation, eda, training
+│   ├── ingestion/        # GDELT & Weather API fetching -> Feature Store
+│   └── models/           # Our multi-headed probability models
+└── frontend/             # React + Vite application
 ```
 
-### Data Flow (Critical Mental Model)
+### Data Flow (The "Vibe" Pipeline)
 
-1. **Ingestion** (every 6 hours): `backend/ingestion/script.py` queries GDELT API for location-filtered news
-2. **Processing**: Raw articles → sentiment classification → signal category extraction (Traffic, Weather, Crime, Sports, etc.)
-3. **Generation**: Signal profiles checked against cache; cache miss triggers visualization composition
-4. **API Response**: FastAPI serves cached/generated visualization + metadata (signal breakdown, source articles)
+1.  **Ingestion & Feature Store** (Every 6 hours):
+    *   Query GDELT (News) and Weather APIs.
+    *   **ML Model**: Classify articles into 9 Signals (Score + Tag).
+    *   **Hopsworks**: Store the aggregated "Vibe Vector" (Max-Pooled scores) in the Feature Group.
+2.  **Generation** (On Demand / Cached):
+    *   Backend checks DB for an existing visualization for the current Vibe Vector.
+    *   *Cache Miss*: Trigger **Hybrid Generation** (Layout -> AI Polish). Save to S3.
+3.  **Presentation**:
+    *   FastAPI serves the Image URL + **Hitbox Metadata**.
+    *   React Frontend renders the image and interactive overlays.
 
-Key insight: **Caching is essential** - signal combinations are deduplicated to avoid redundant generation.
+## Signal Categories & Data Schema
 
-## Signal Categories & Visual Mapping
+The system tracks **9 Primary Signals**. The ML model outputs a **Score** (-1.0 to 1.0) and a **Tag** (string) for each.
 
-Eight primary signal categories define the visualization vocabulary:
-- **Traffic & Transportation**: Road congestion, public transit disruptions
-- **Weather Events**: Storms, heatwaves, snow, flooding
-- **Crime & Safety**: Incidents, police activity
-- **Festivals & Events**: Cultural celebrations, concerts
-- **Politics**: Elections, protests, government announcements
-- **Sports**: Major games, victories
-- **Accidents & Emergencies**: Fires, industrial accidents
-- **Economic**: Market news, business developments
-
-Each category has a corresponding visual "sticker" that scales in size/intensity (0-100) based on signal strength. This is the foundation of template-based composition (currently favored over generative AI for predictability).
+*   **Categories**: `emergencies`, `crime`, `festivals`, `transportation`, `weather_temp`, `weather_wet`, `sports`, `economics`, `politics`.
+*   **Interpretation**:
+    *   `Score 0.0`: Irrelevant/Absent.
+    *   `Score ~0.9 or ~-0.9`: High Intensity / Active Event.
+    *   `Tag`: Descriptive keyword (e.g., "fire", "protest", "snow") used to select assets.
 
 ## Technical Stack & Key Dependencies
 
-**Python 3.13+** across all modules.
+*   **Language**: Python 3.10+ (Backend/ML), TypeScript (Frontend).
+*   **ML & Data**: **Hopsworks** (Feature Store & Model Registry), `gdeltdoc`.
+*   **Generation**: `Pillow` (Layout), **Stability AI API** (Image-to-Image Polish).
+*   **Backend**: `fastapi`, `redis` (or similar for cache), S3-compatible storage.
+*   **Frontend**: React, Vite.
 
-**Core Libraries**:
-- `gdeltdoc`: GDELT API client for news ingestion (see `backend/ingestion/script.py` for example usage)
-- `polars`: DataFrame processing (preferred over pandas for performance; conversion from pandas necessary for GDELT output)
-- `pandas`: Required by gdeltdoc; convert to polars for internal pipelines
-- `fastapi[standard]`: REST API framework (backend/server)
+## Implementation Guidelines
 
-**Containerization**: Docker (single container or microservice approach; not Docker Compose)
+### 1. Data & ML (Hopsworks Integration)
+*   **Refactor Ingestion**: Modify `ml/ingestion/script.py`. Instead of processing locally, push cleaned data to a Hopsworks Feature Group.
+*   **Model**: The classifier must be multi-head (Output: Regression Score + Classification Tag).
+*   **Aggregation**: When creating the "Vibe Vector" for a 6-hour window, use **Max-Pooling**. Do not average zeros.
 
-**Database**: Artifact store (MinIO, S3-compatible, or PostgreSQL blob storage) for caching generated visualizations
+### 2. Image Generation Strategy (Hybrid)
+*   **Step 1: Layout (Python/Pillow)**:
+    *   Map `Category` + `Tag` + `Intensity` -> `Asset PNG` (e.g., "emergency" + "0.8 score" + "fire" -> `backend/assets/fire_major.png`). This is just an example. The exact images will be provided later on, but set up a template for it.
+    *   Place assets into Zones (Sky, City, Street) based on logic.
+    *   **CRITICAL**: Record the `{x, y, w, h}` coordinates of every placed asset into a `hitboxes` list.
+    *   Apply "Atmosphere Overlays" (rain, sun gradients) as the final layer.
+*   **Step 2: Polish (Stability AI)**:
+    *   Send the Layout image to Stability AI `Img2Img`.
+    *   **Constraint**: Keep `denoising_strength` (or `image_strength`) low (~0.35).
+    *   *Reason*: We need the AI to beautify the style but **preserve the hitbox locations**.
 
-## Conventions & Patterns
+### 3. Caching & Serving (Cost Control)
+*   **"Vibe Hash"**: Create a unique key for the request: `City_Date_TimeWindow`.
+*   **Logic**:
+    *   Check DB for `Vibe Hash`.
+    *   If found: Return stored URL + Hitboxes. **(Zero Cost)**
+    *   If missing: Generate -> Upload S3 -> Store DB -> Return.
+*   **Frontend**: The React app *never* triggers generation directly. It only fetches the "current vibe" endpoint.
 
-### Data Processing Workflow
-- **Ingestion output**: Use `gdeltdoc.GdeltDoc().article_search(filters)` returning pandas DataFrame
-- **Internal format**: Convert to `polars.DataFrame` immediately (see `backend/ingestion/script.py` line ~11-12)
-- **Geographic filtering**: Use FIPS country codes (e.g., "SW" for Sweden) in `Filters(source_country=...)`
+### 4. Frontend (Interactive Canvas)
+*   **Component**: `<VibeCanvas />`
+*   **Logic**:
+    *   Render the Image URL.
+    *   Render invisible `<div>` overlays using the `hitboxes` metadata.
+    *   On Click -> Open Modal with news articles linked to that signal.
 
-### API Design (FastAPI)
-- Query parameters: `location` (city/country), optional date/time range
-- Response payload includes generated image + metadata dict with signal breakdown
-- Endpoints should be idempotent for caching compatibility
+## Critical Gotchas & Constraints
 
-### Image Generation (Template-Based)
-- Cached at composite level: key = sorted signal names + intensity levels
-- Cache misses trigger composition (not regeneration of full image)
-- Weather data integration adjusts visual mood (color palette, background opacity)
+1.  **Hitbox Drift**: If the AI Polish strength is too high (>0.5), objects will move, and the clicks will miss. Keep it subtle.
+2.  **Cost Management**: Strict caching is mandatory. Do not expose the "Generate" function to the public API.
+3.  **Asset Library**: You need a `assets/` folder with transparent PNGs for every potential tag. If a tag is missing, fallback to a generic category icon.
+4.  **GDELT Data**: Continue using `gdeltdoc` but ensure the output flows into Hopsworks.
 
-## Extending the System
+## Success Criteria
 
-### Adding New Signal Categories
-1. Define category in signal list (8 primary, conceptually extensible)
-2. Create template asset (vector graphics or layered image)
-3. Update sentiment classification model to detect new category
-4. Register in visualization composition service
-
-### Adding Geographic Regions
-- Extend ingestion script `source_country` parameter with new FIPS codes
-- Ensure sentiment classification model handles new language/dialect if needed
-- Update frontend location selector
-
-## Critical Gotchas & Notes
-
-1. **GDELT Data Format**: Always convert pandas output from `gdeltdoc` to polars for consistency (pandas not used internally)
-2. **Cache Key Design**: Signal intensity levels must be discretized consistently (prevents cache fragmentation)
-3. **Sentiment Model Scope**: Currently focused on Swedish news; non-Swedish expansion requires model retraining
-4. **Image Style Consistency**: Template approach essential for POC; avoid mixing generative AI until architecture matures
-5. **6-Hour Update Cadence**: Ingestion scheduling is critical for "hot news" relevance; design for asynchronous queue processing
-
-## Key Files for Reference
-
-- `README.md`: Full technical spec including image caching strategy details
-- `backend/ingestion/script.py`: GDELT integration pattern (reference for new data sources)
-- `backend/server/pyproject.toml`: Dependency versioning (Python 3.13+ requirement)
-- `ingestion.Dockerfile`: Container setup for ingestion service
-
-## Success Criteria (for PRs/features)
-
-- [ ] News ingestion works for target location via GDELT
-- [ ] Classification accurately maps headlines → signal categories
-- [ ] Visualizations represent signal combinations meaningfully
-- [ ] Frontend drill-down to source articles functions
-- [ ] Caching reduces redundant generation for similar profiles
-
+- [ ] **Pipeline**: News ingestion flows into Hopsworks Feature Store.
+- [ ] **Hybrid Gen**: `generate_layout` produces a messy collage; `polish_image` makes it look artistic.
+- [ ] **Interactivity**: Clicking the "Fire" element in the React app opens the correct news articles.
+- [ ] **Idempotency**: Refreshing the page does NOT trigger a new Stability AI API call.

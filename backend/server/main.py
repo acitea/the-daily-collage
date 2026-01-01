@@ -15,8 +15,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure project root is on the Python path for absolute imports
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +42,12 @@ app = FastAPI(
 
 # Import modules (these imports will work once dependencies are installed)
 try:
-    from visualization.composition import (
+    from backend.visualization.composition import (
         VisualizationService,
         SignalIntensity,
     )
-    from utils.classification import classify_articles
-    from ingestion.script import get_news_for_location, normalize_country_input
+    from ml.utils.classification import classify_articles
+    from ml.ingestion.script import get_news_for_location, normalize_country_input
 except ImportError:
     logger.warning(
         "visualization module not available - running in stub mode"
