@@ -43,11 +43,11 @@ Then sync dependencies for each component:
 
 ```bash
 # Install ingestion service dependencies
-cd backend/ingestion
+cd ml/ingestion
 uv sync
 
 # Install server dependencies
-cd ../server
+cd ../../backend/server
 uv sync
 ```
 
@@ -56,23 +56,31 @@ uv sync
 ```
 the-daily-collage/
 ├── backend/
-│   ├── ingestion/
-│   │   ├── script.py           # GDELT API data fetching
-│   │   └── pyproject.toml      # Dependencies
+│   ├── assets/                  # Sticker PNGs/overlays (placeholders)
 │   ├── server/
-│   │   ├── main.py             # FastAPI application
-│   │   ├── pyproject.toml      # Dependencies
-│   │   └── README.md           # Server documentation
-│   ├── utils/
-│   │   ├── classification.py   # Sentiment classification & signal detection
-│   │   └── processing.py       # Data cleaning & deduplication
+│   │   ├── main.py              # FastAPI application
+│   │   ├── pyproject.toml       # Dependencies
+│   │   └── README.md            # Server documentation
+│   ├── utils/                   # Backend helpers (currently placeholder)
 │   └── visualization/
-│       └── composition.py      # Image generation & caching
+│       └── composition.py       # Image generation & caching
+├── ml/
+│   ├── ingestion/
+│   │   ├── script.py            # GDELT API data fetching
+│   │   └── pyproject.toml       # Dependencies
+│   ├── utils/
+│   │   ├── classification.py    # Sentiment classification & signal detection
+│   │   └── processing.py        # Data cleaning & deduplication
+│   ├── models/                  # Model definitions
+│   ├── data/                    # Training/feature data
+│   └── notebooks/               # Exploration and training notebooks
 ├── frontend/
-│   └── index.html              # Web UI
-├── README.md                   # Full technical specification
-├── ingestion.Dockerfile        # Docker configuration
-└── [data/, notebooks/, docs/]  # Supporting directories
+│   └── index.html               # Web UI
+├── docs/                        # Additional documentation
+├── phases/                      # Phase plans and structure notes
+├── README.md                    # Full technical specification
+├── ingestion.Dockerfile         # Docker configuration for ingestion
+└── quick-start.sh               # Convenience script
 ```
 
 ## Running the System
@@ -113,7 +121,7 @@ The API will be available at `http://localhost:8000` with interactive documentat
 ### To fetch actual news data from GDELT:
 
 ```bash
-cd backend/ingestion
+cd ml/ingestion
 
 # Sync environment first
 uv sync
@@ -133,16 +141,16 @@ By default, the ingestion script supports:
 - `sweden` or `se` (FIPS code: SW)
 - `united_states` or `us` (FIPS code: US)
 
-To fetch news from other countries, modify the `SUPPORTED_COUNTRIES` dict in `script.py` with appropriate FIPS codes.
+To fetch news from other countries, modify the `SUPPORTED_COUNTRIES` dict in `ml/ingestion/script.py` with appropriate FIPS codes.
 
 ## Core Modules
 
-### Classification Module (`backend/utils/classification.py`)
+### Classification Module (`ml/utils/classification.py`)
 
 Classifies news articles into signal categories:
 
 ```python
-from backend.utils.classification import classify_articles, aggregate_signals
+from ml.utils.classification import classify_articles, aggregate_signals
 
 # Classify articles (currently using keyword-based approach)
 classified = classify_articles(articles_df)
@@ -180,12 +188,12 @@ signals = [
 image_data, metadata = service.generate_or_get(signals, location="Stockholm")
 ```
 
-### Data Processing (`backend/utils/processing.py`)
+### Data Processing (`ml/utils/processing.py`)
 
 Handles cleaning and validation:
 
 ```python
-from backend.utils.processing import ArticleProcessor
+from ml.utils.processing import ArticleProcessor
 
 processor = ArticleProcessor()
 cleaned_articles = processor.process(raw_articles)
@@ -245,7 +253,7 @@ Currently, no environment variables are required. In production, you may want to
 
 ### Adding Custom Locations
 
-Edit `backend/ingestion/script.py` and add to `SUPPORTED_COUNTRIES`:
+Edit `ml/ingestion/script.py` and add to `SUPPORTED_COUNTRIES`:
 
 ```python
 SUPPORTED_COUNTRIES = {
@@ -279,7 +287,7 @@ uv run ruff check backend/
 
 ### 3. Adding New Signal Categories
 
-1. Add to `SignalCategory` enum in `backend/utils/classification.py`
+1. Add to `SignalCategory` enum in `ml/utils/classification.py`
 2. Add keywords to `SIGNAL_KEYWORDS` dict
 3. Create visual template (in full implementation)
 4. Update API documentation
@@ -289,7 +297,7 @@ uv run ruff check backend/
 Current implementation uses keyword matching. For better accuracy, replace with ML:
 
 ```python
-# In backend/utils/classification.py
+# In ml/utils/classification.py
 def classify_article_by_model(title: str) -> List[SignalScore]:
     # Use pre-trained transformer model
     model = load_model("bert-swedish-classifier")
@@ -318,8 +326,8 @@ FROM ghcr.io/astral-sh/uv:0.4.30-python3.13-slim
 WORKDIR /app
 
 COPY backend/server/ /app/
-COPY backend/utils/ /app/utils/
 COPY backend/visualization/ /app/visualization/
+COPY ml/ /app/ml/
 
 RUN uv sync
 
@@ -371,8 +379,8 @@ uv run python script.py
 
 - Check internet connection
 - Verify GDELT service is operational: https://www.gdeltproject.org/
-- Try increasing timeout in `backend/ingestion/script.py`
-- Run with: `uv run python backend/ingestion/script.py --verbose`
+- Try increasing timeout in `ml/ingestion/script.py`
+- Run with: `uv run python ml/ingestion/script.py --verbose`
 
 ### Frontend shows "API error"
 

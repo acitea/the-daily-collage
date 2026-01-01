@@ -17,14 +17,14 @@ The Daily Collage is now a **complete, working proof-of-concept** that transform
 
 ## ✅ Completed Components
 
-### 1. News Ingestion (`backend/ingestion/script.py`)
+### 1. News Ingestion (`ml/ingestion/script.py`)
 - ✅ GDELT API integration working
 - ✅ Fetches real news from any country (tested with Sweden: 100 articles)
 - ✅ Supports timespan filtering (currently 1 week)
 - ✅ Converts to Polars DataFrames for efficiency
 - ✅ Full error handling and logging
 
-### 2. Classification (`backend/utils/classification.py`)
+### 2. Classification (`ml/utils/classification.py`)
 - ✅ Classifies articles into 8 signal categories:
   - Traffic & Transportation
   - Weather Events
@@ -38,7 +38,7 @@ The Daily Collage is now a **complete, working proof-of-concept** that transform
 - ✅ Intensity scoring (0-100 scale)
 - ✅ Confidence metrics included
 
-### 3. Data Processing (`backend/utils/processing.py`)
+### 3. Data Processing (`ml/utils/processing.py`)
 - ✅ Text normalization and cleaning
 - ✅ Article deduplication (SHA256-based)
 - ✅ Batch validation with statistics

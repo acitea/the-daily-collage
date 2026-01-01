@@ -15,7 +15,7 @@ The ingestion module serves as the entry point of The Daily Collage data pipelin
 ## Quick Start
 
 ```bash
-cd backend/ingestion
+cd ml/ingestion
 uv sync
 uv run python script.py
 ```
@@ -27,7 +27,7 @@ This fetches news for Sweden and prints results.
 ### Fetch News for a Specific Country
 
 ```python
-from backend.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news
 
 # Fetch Swedish news
 articles = fetch_news(country="sweden", max_articles=250)
@@ -40,7 +40,7 @@ articles = fetch_news(country="united_states", max_articles=500)
 ### Fetch News Using FIPS Code Directly
 
 ```python
-from backend.ingestion.script import get_news_for_location
+from ml.ingestion.script import get_news_for_location
 
 # SW = Sweden (FIPS code)
 articles = get_news_for_location(country_code="SW", max_articles=250)
@@ -49,7 +49,7 @@ articles = get_news_for_location(country_code="SW", max_articles=250)
 ### Handle Errors Gracefully
 
 ```python
-from backend.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -188,9 +188,9 @@ The ingestion module is the first step in the pipeline:
 ```
 Ingestion (script.py)
     ↓ Outputs: pl.DataFrame
-Processing (backend/utils/processing.py)
+Processing (ml/utils/processing.py)
     ↓ Deduplicates & validates
-Classification (backend/utils/classification.py)
+Classification (ml/utils/classification.py)
     ↓ Extracts signals
 Visualization (backend/visualization/composition.py)
     ↓ Generates images
@@ -201,9 +201,9 @@ API (backend/server/main.py)
 ### Complete Example
 
 ```python
-from backend.ingestion.script import fetch_news
-from backend.utils.processing import ArticleProcessor
-from backend.utils.classification import classify_articles, aggregate_signals
+from ml.ingestion.script import fetch_news
+from ml.utils.processing import ArticleProcessor
+from ml.utils.classification import classify_articles, aggregate_signals
 
 # Step 1: Fetch articles
 articles_df = fetch_news(country="sweden", max_articles=250)
@@ -354,7 +354,7 @@ uv sync
 
 ```python
 # Manual testing
-from backend.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news
 
 # Test Sweden
 articles = fetch_news(country="sweden")
@@ -381,7 +381,7 @@ For production use with 6-hour updates:
 
 ```python
 from apscheduler.schedulers.background import BackgroundScheduler
-from backend.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news
 
 scheduler = BackgroundScheduler()
 
@@ -402,7 +402,7 @@ scheduler.start()
 
 ```python
 from celery import Celery
-from backend.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news
 
 app = Celery('daily_collage')
 

@@ -8,5 +8,5 @@ Purpose: document the structural changes just applied and the remaining cleanup 
 - Updated imports in `backend/server/main.py` and `test_pipeline.py` to use absolute `backend.*` and `ml.*` modules.
 
 ## Follow-ups
-- Update docs and scripts that still reference old paths (examples: `ml/ingestion/README.md` still shows `backend/ingestion` commands; any Dockerfiles or quick-start guides may also assume the old layout).
+- Spot-check any remaining docs or scripts for legacy paths after the ml/ migration; update tooling notes as needed.
 - Ensure tooling (tasks, CI, Docker) resolves the new module layout; adjust PYTHONPATH/env loading accordingly.

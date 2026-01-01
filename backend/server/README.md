@@ -32,12 +32,12 @@ Interactive API documentation available at:
    - Manages caching
    - Coordinates with TemplateComposer
 
-2. **Classification** (`backend/utils/classification.py`)
+2. **Classification** (`ml/utils/classification.py`)
    - Converts news articles to signal categories
    - Calculates signal intensities
    - Aggregates signals across articles
 
-3. **Data Processing** (`backend/utils/processing.py`)
+3. **Data Processing** (`ml/utils/processing.py`)
    - Validates articles
    - Removes duplicates
    - Cleans text
@@ -355,8 +355,8 @@ FROM ghcr.io/astral-sh/uv:0.4.30-python3.13-slim
 WORKDIR /app
 
 COPY backend/server/ /app/
-COPY backend/utils/ /app/utils/
 COPY backend/visualization/ /app/visualization/
+COPY ml/ /app/ml/
 
 RUN uv sync
 
@@ -380,9 +380,9 @@ uv run gunicorn main:app \
 
 ## Related Modules
 
-- **Classification**: `backend/utils/classification.py`
+- **Classification**: `ml/utils/classification.py`
 - **Image Composition**: `backend/visualization/composition.py`
-- **Data Processing**: `backend/utils/processing.py`
-- **News Ingestion**: `backend/ingestion/script.py`
+- **Data Processing**: `ml/utils/processing.py`
+- **News Ingestion**: `ml/ingestion/script.py`
 
 See `GETTING_STARTED.md` for complete system documentation.
