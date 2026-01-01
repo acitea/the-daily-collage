@@ -1,0 +1,122 @@
+{
+  "calm_day": {
+    "description": "A typical calm day with minimal incidents",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.1,
+      "weather_temp": 0.2,
+      "weather_wet": -0.1,
+      "crime": -0.7,
+      "festivals": 0.1,
+      "sports": 0.0,
+      "emergencies": -0.9,
+      "economics": 0.1,
+      "politics": 0.0
+    }
+  },
+  "active_day": {
+    "description": "An active day with festivals, events, and moderate traffic",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.6,
+      "weather_temp": 0.3,
+      "weather_wet": -0.2,
+      "crime": 0.1,
+      "festivals": 0.8,
+      "sports": 0.5,
+      "emergencies": -0.1,
+      "economics": 0.4,
+      "politics": 0.2
+    }
+  },
+  "crisis_day": {
+    "description": "A day with severe weather, traffic, and emergency activity",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.8,
+      "weather_temp": 0.9,
+      "weather_wet": 0.7,
+      "crime": 0.5,
+      "festivals": -0.9,
+      "sports": -0.4,
+      "emergencies": 0.9,
+      "economics": -0.3,
+      "politics": 0.4
+    }
+  },
+  "rainy_day": {
+    "description": "A rainy day with reduced visibility and activity",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.3,
+      "weather_temp": -0.2,
+      "weather_wet": 0.9,
+      "crime": 0.0,
+      "festivals": 0.0,
+      "sports": -0.3,
+      "emergencies": 0.2,
+      "economics": -0.1,
+      "politics": -0.1
+    }
+  },
+  "protest_day": {
+    "description": "A day with political protests and increased police activity",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.5,
+      "weather_temp": 0.0,
+      "weather_wet": 0.0,
+      "crime": 0.4,
+      "festivals": 0.3,
+      "sports": -0.2,
+      "emergencies": 0.3,
+      "economics": 0.1,
+      "politics": 0.9
+    }
+  },
+  "sports_event_day": {
+    "description": "A day with major sports events and celebration",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.7,
+      "weather_temp": 0.2,
+      "weather_wet": -0.3,
+      "crime": 0.0,
+      "festivals": 0.7,
+      "sports": 0.9,
+      "emergencies": 0.1,
+      "economics": 0.5,
+      "politics": 0.1
+    }
+  },
+  "economic_crisis": {
+    "description": "Market downturn and economic concerns dominate news",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.2,
+      "weather_temp": 0.0,
+      "weather_wet": 0.0,
+      "crime": 0.3,
+      "festivals": -0.4,
+      "sports": 0.1,
+      "emergencies": -0.2,
+      "economics": -0.8,
+      "politics": 0.3
+    }
+  },
+  "perfect_day": {
+    "description": "Perfect weather with positive events and low incidents",
+    "city": "stockholm",
+    "vibe_vector": {
+      "transportation": 0.2,
+      "weather_temp": 0.5,
+      "weather_wet": -0.8,
+      "crime": -0.8,
+      "festivals": 0.6,
+      "sports": 0.5,
+      "emergencies": -0.95,
+      "economics": 0.3,
+      "politics": -0.2
+    }
+  }
+}

@@ -7,12 +7,13 @@ underlying news articles.
 
 import logging
 import sys
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Ensure project root is on the Python path for absolute imports
@@ -37,58 +38,58 @@ logging.basicConfig(
 app = FastAPI(
     title="The Daily Collage API",
     description="REST API for generating location-based news visualizations",
-    version="0.1.0",
+    version="0.2.0",
 )
 
-# Import modules (these imports will work once dependencies are installed)
+# Import modules
 try:
-    from backend.visualization.composition import (
-        VisualizationService,
-        SignalIntensity,
-    )
-    from ml.utils.classification import classify_articles
-    from ml.ingestion.script import get_news_for_location, normalize_country_input
-except ImportError:
-    logger.warning(
-        "visualization module not available - running in stub mode"
-    )
+    from backend.visualization.composition import VisualizationService
+    from backend.settings import settings
+except ImportError as e:
+    logger.error(f"Import error: {e}")
 
 
 # Pydantic models for API requests/responses
-class SignalData(BaseModel):
-    """Signal data in API response."""
+class HitboxData(BaseModel):
+    """Hitbox metadata for interactive elements."""
 
-    name: str
-    intensity: float
+    x: int
+    y: int
+    width: int
+    height: int
+    signal_category: str
+    signal_tag: str
+    signal_intensity: float
+    signal_score: float
+
+
+class VibeVectorRequest(BaseModel):
+    """Request body for explicit vibe vector visualization."""
+
+    city: str
+    vibe_vector: Dict[str, float]  # category -> score (-1.0 to 1.0)
+    timestamp: Optional[str] = None  # ISO format datetime
+    source_articles: Optional[List[Dict]] = None  # Optional article metadata
 
 
 class VisualizationResponse(BaseModel):
     """Response for visualization request."""
 
-    location: str
-    generated_at: str
-    signal_count: int
-    signals: List[SignalData]
+    city: str
+    vibe_hash: str
     image_url: str
+    hitboxes: List[HitboxData]
+    vibe_vector: Dict[str, float]
     cached: bool
+    generated_at: str
 
 
-class ArticleMetadata(BaseModel):
-    """Metadata for a source article."""
+class CacheStatusResponse(BaseModel):
+    """Response for cache status."""
 
-    title: str
-    url: str
-    source: str
-    date: Optional[str] = None
-
-
-class LocationStatusResponse(BaseModel):
-    """Response for location status request."""
-
-    location: str
-    status: str
-    last_updated: Optional[str] = None
-    message: str
+    vibe_hash: str
+    cached: bool
+    timestamp: str
 
 
 # Global visualization service
@@ -111,7 +112,6 @@ async def startup_event():
     logger.info("Starting The Daily Collage API server")
     init_visualization_service()
 
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """FastAPI shutdown event handler."""
@@ -124,7 +124,7 @@ async def root():
     return {
         "name": "The Daily Collage API",
         "status": "operational",
-        "version": "0.1.0",
+        "version": "0.2.0",
     }
 
 
@@ -134,28 +134,22 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
+        "service": "visualization" if viz_service else "initializing",
     }
 
 
-@app.get("/api/visualization", tags=["Visualization"])
-async def get_visualization(
-    location: str = Query(
-        "sweden", description="Location name (e.g., 'sweden', 'stockholm')"
-    ),
-    force_regenerate: bool = Query(
-        False,
-        description="If true, skip cache and regenerate visualization",
-    ),
-) -> VisualizationResponse:
+@app.post("/api/visualization", tags=["Visualization"], response_model=VisualizationResponse)
+async def create_visualization(request: VibeVectorRequest):
     """
-    Get a visualization for a location.
+    Generate visualization from explicit vibe vector.
+
+    Takes real signal scores from ML pipeline and generates layout + polish.
 
     Args:
-        location: Geographic location name
-        force_regenerate: Force regeneration instead of using cache
+        request: VibeVectorRequest with city, vibe_vector, optional timestamp
 
     Returns:
-        VisualizationResponse: Generated visualization with metadata
+        VisualizationResponse with image URL and hitboxes
     """
     if not viz_service:
         raise HTTPException(
@@ -163,41 +157,51 @@ async def get_visualization(
         )
 
     try:
-        # Placeholder: In production, would fetch actual signal data from ingestion + classification
-        # For now, return mock data to demonstrate API structure
-        mock_signals = [
-            SignalIntensity("weather", 65.0),
-            SignalIntensity("traffic", 45.0),
-            SignalIntensity("politics", 75.0),
-        ]
+        # Parse timestamp if provided
+        timestamp = None
+        if request.timestamp:
+            try:
+                timestamp = datetime.fromisoformat(request.timestamp)
+            except ValueError:
+                timestamp = datetime.utcnow()
+        else:
+            timestamp = datetime.utcnow()
 
+        # Generate or fetch from cache
         image_data, metadata = viz_service.generate_or_get(
-            mock_signals,
-            location=location,
-            force_regenerate=force_regenerate,
+            city=request.city,
+            vibe_vector=request.vibe_vector,
+            timestamp=timestamp,
+            source_articles=request.source_articles,
         )
+
+        # Build response with hitbox objects
+        hitboxes = [HitboxData(**hb) for hb in metadata.get("hitboxes", [])]
 
         return VisualizationResponse(
-            location=location,
+            city=request.city,
+            vibe_hash=metadata["vibe_hash"],
+            image_url=metadata["image_url"],
+            hitboxes=hitboxes,
+            vibe_vector=request.vibe_vector,
+            cached=metadata["cached"],
             generated_at=datetime.utcnow().isoformat(),
-            signal_count=len(mock_signals),
-            signals=[SignalData(name=s.signal_name, intensity=s.intensity) for s in mock_signals],
-            image_url=f"/api/visualization/{location}/image",
-            cached=not force_regenerate,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error generating visualization: {str(e)}")
+        logger.error(f"Error generating visualization: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/visualization/{location}/image", tags=["Visualization"])
-async def get_visualization_image(location: str):
+@app.get("/api/visualization/{vibe_hash}/image", tags=["Visualization"])
+async def get_visualization_image(vibe_hash: str):
     """
-    Get the actual image data for a visualization.
+    Get the actual image for a cached visualization.
 
     Args:
-        location: Geographic location
+        vibe_hash: Hash from previous /api/visualization request
 
     Returns:
         PNG image data
@@ -208,85 +212,39 @@ async def get_visualization_image(location: str):
         )
 
     try:
-        # Generate mock signals (in production, would fetch from ingestion)
-        signals = [
-            SignalIntensity("weather", 65),
-            SignalIntensity("traffic", 45),
-            SignalIntensity("politics", 75),
-        ]
+        # Try to retrieve from storage
+        storage = viz_service.cache.storage
+        image_data = storage.get_image(vibe_hash)
 
-        # Get or generate visualization
-        image_data, _ = viz_service.generate_or_get(signals, location)
+        if not image_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Image not found for vibe hash: {vibe_hash}",
+            )
 
-        # Return PNG image
-        from fastapi.responses import Response
         return Response(content=image_data, media_type="image/png")
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching image: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/articles", tags=["Articles"])
-async def get_articles_for_location(
-    location: str = Query("sweden", description="Location name"),
-    signal: Optional[str] = Query(
-        None, description="Filter articles by signal category"
-    ),
-) -> JSONResponse:
+@app.get("/api/cache/status", tags=["Cache"])
+async def check_cache_status(
+    city: str = Query(..., description="City name"),
+    vibe_vector: Optional[str] = Query(None, description="JSON-encoded vibe vector"),
+) -> CacheStatusResponse:
     """
-    Get source articles that contributed to a visualization.
+    Check if a vibe is cached.
 
     Args:
-        location: Geographic location
-        signal: Optional signal category filter
+        city: Geographic location
+        vibe_vector: JSON-encoded vibe vector dict
 
     Returns:
-        List of articles with metadata
-    """
-    # Placeholder: In production, would fetch actual articles from database
-    mock_articles = [
-        {
-            "title": "Heavy traffic on Stockholm ring road",
-            "url": "https://example.com/article1",
-            "source": "SVT Nyheter",
-            "date": "2025-12-11T14:30:00Z",
-            "signal": "traffic",
-        },
-        {
-            "title": "Rainstorm expected in southern Sweden",
-            "url": "https://example.com/article2",
-            "source": "SMHI",
-            "date": "2025-12-11T10:15:00Z",
-            "signal": "weather",
-        },
-    ]
-
-    if signal:
-        mock_articles = [a for a in mock_articles if a["signal"] == signal]
-
-    return JSONResponse(content={"location": location, "articles": mock_articles})
-
-
-@app.get("/api/visualization/gdelt/{location}", tags=["Visualization"])
-async def get_visualization_from_gdelt(
-    location: str = "sweden",
-    force_regenerate: bool = Query(
-        False, description="Force regeneration instead of using cache"
-    ),
-):
-    """
-    Get a visualization based on real GDELT news data.
-
-    This endpoint fetches actual news articles from GDELT, classifies them,
-    and generates a visualization based on real data.
-
-    Args:
-        location: Geographic location (e.g., 'sweden', 'stockholm')
-        force_regenerate: Force regeneration instead of using cache
-
-    Returns:
-        JSON with visualization metadata and image URL
+        Cache status with vibe hash
     """
     if not viz_service:
         raise HTTPException(
@@ -294,76 +252,109 @@ async def get_visualization_from_gdelt(
         )
 
     try:
-        # Normalize location to country code
-        try:
-            country_code = normalize_country_input(location)
-        except ValueError:
-            # Try as-is if not a known country
-            country_code = location.upper()[:2]
+        import json
 
-        # Fetch real news from GDELT
-        logger.info(f"Fetching GDELT news for {location} ({country_code})")
-        articles_df = get_news_for_location(country_code, max_articles=100)
+        if not vibe_vector:
+            raise HTTPException(status_code=400, detail="vibe_vector required")
 
-        if len(articles_df) == 0:
-            logger.warning(f"No GDELT articles found for {location}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"No news found for location: {location}",
-            )
+        vector = json.loads(vibe_vector)
+        timestamp = datetime.utcnow()
 
-        # Classify articles into signals
-        logger.info(f"Classifying {len(articles_df)} articles")
-        classified = classify_articles(articles_df)
+        cached = viz_service.cache.exists(city, timestamp, vector)
 
-        # Aggregate signals
-        signal_dict = {}
-        for article in classified:
-            if article.primary_signal:
-                signal = article.primary_signal.value
-                intensity = article.signals[0].intensity if article.signals else 0
-                if signal not in signal_dict:
-                    signal_dict[signal] = []
-                signal_dict[signal].append(intensity)
+        from backend.visualization.caching import VibeHash
 
-        # Convert to SignalIntensity objects
-        signals_for_viz = []
-        for signal_name in sorted(
-            signal_dict.keys(),
-            key=lambda s: sum(signal_dict[s]) / len(signal_dict[s]),
-            reverse=True,
-        ):
-            intensities = signal_dict[signal_name]
-            avg_intensity = sum(intensities) / len(intensities)
-            signals_for_viz.append(SignalIntensity(signal_name, avg_intensity))
+        vibe_hash = VibeHash.generate(city, timestamp, vector)
 
-        # Generate visualization
-        image_data, metadata = viz_service.generate_or_get(
-            signals_for_viz,
-            location=location,
-            force_regenerate=force_regenerate,
+        return CacheStatusResponse(
+            vibe_hash=vibe_hash,
+            cached=cached,
+            timestamp=timestamp.isoformat(),
         )
 
-        return VisualizationResponse(
-            location=location,
-            generated_at=datetime.utcnow().isoformat(),
-            signal_count=len(signals_for_viz),
-            signals=[
-                SignalData(name=s.signal_name, intensity=s.intensity)
-                for s in signals_for_viz
-            ],
-            image_url=f"/api/visualization/{location}/image",
-            cached=not force_regenerate,
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid vibe_vector JSON")
+    except Exception as e:
+        logger.error(f"Error checking cache status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/hitboxes/{vibe_hash}", tags=["Metadata"])
+async def get_hitboxes(vibe_hash: str):
+    """
+    Get hitbox metadata for a cached visualization.
+
+    These are the clickable regions in the image.
+
+    Args:
+        vibe_hash: Hash from /api/visualization request
+
+    Returns:
+        List of hitboxes with signal info
+    """
+    if not viz_service:
+        raise HTTPException(
+            status_code=503, detail="Visualization service not initialized"
+        )
+
+    try:
+        storage = viz_service.cache.storage
+        metadata = storage.get_metadata(vibe_hash)
+
+        if not metadata:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Metadata not found for vibe hash: {vibe_hash}",
+            )
+
+        return JSONResponse(content={"hitboxes": metadata.hitboxes})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching hitboxes: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/articles/{vibe_hash}", tags=["Articles"])
+async def get_articles_for_vibe(vibe_hash: str):
+    """
+    Get source articles that contributed to a visualization.
+
+    Args:
+        vibe_hash: Hash from /api/visualization request
+
+    Returns:
+        List of articles with metadata and signal associations
+    """
+    if not viz_service:
+        raise HTTPException(
+            status_code=503, detail="Visualization service not initialized"
+        )
+
+    try:
+        storage = viz_service.cache.storage
+        metadata = storage.get_metadata(vibe_hash)
+
+        if not metadata:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Metadata not found for vibe hash: {vibe_hash}",
+            )
+
+        return JSONResponse(
+            content={
+                "vibe_hash": vibe_hash,
+                "city": metadata.city,
+                "articles": metadata.source_articles,
+            }
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching GDELT data: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing GDELT data: {str(e)}",
-        )
+        logger.error(f"Error fetching articles: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/supported-locations", tags=["Metadata"])
@@ -383,52 +374,49 @@ async def get_signal_categories():
     """Get list of all signal categories used for classification."""
     categories = [
         {
-            "id": "traffic",
-            "name": "Traffic & Transportation",
-            "description": "Road congestion, public transit disruptions",
-            "icon": "🚗",
+            "id": "transportation",
+            "name": "Transportation",
+            "description": "Traffic, congestion, accidents",
         },
         {
-            "id": "weather",
-            "name": "Weather Events",
-            "description": "Storms, heatwaves, snow, flooding",
-            "icon": "🌧️",
+            "id": "weather_temp",
+            "name": "Weather - Temperature",
+            "description": "Hot, cold, extreme temperatures",
+        },
+        {
+            "id": "weather_wet",
+            "name": "Weather - Precipitation",
+            "description": "Rain, snow, flooding",
         },
         {
             "id": "crime",
             "name": "Crime & Safety",
-            "description": "Incidents, police activity, emergency services",
-            "icon": "🚨",
+            "description": "Theft, assault, police activity",
         },
         {
             "id": "festivals",
             "name": "Festivals & Events",
-            "description": "Cultural celebrations, concerts, public gatherings",
-            "icon": "🎉",
-        },
-        {
-            "id": "politics",
-            "name": "Politics",
-            "description": "Elections, protests, government announcements",
-            "icon": "🏛️",
+            "description": "Concerts, celebrations, gatherings",
         },
         {
             "id": "sports",
             "name": "Sports",
-            "description": "Major games, victories, sporting events",
-            "icon": "⚽",
+            "description": "Games, victories, sporting events",
         },
         {
-            "id": "accidents",
-            "name": "Accidents & Emergencies",
-            "description": "Fires, industrial accidents, medical emergencies",
-            "icon": "🔥",
+            "id": "emergencies",
+            "name": "Emergencies",
+            "description": "Fires, earthquakes, evacuations",
         },
         {
-            "id": "economic",
-            "name": "Economic",
-            "description": "Market news, business developments, employment",
-            "icon": "💼",
+            "id": "economics",
+            "name": "Economics",
+            "description": "Market news, business developments",
+        },
+        {
+            "id": "politics",
+            "name": "Politics",
+            "description": "Elections, protests, government",
         },
     ]
     return JSONResponse(content={"categories": categories})
@@ -443,8 +431,13 @@ async def get_cache_stats():
         )
 
     try:
-        stats = viz_service.cache.get_stats()
-        return JSONResponse(content={"cache": stats})
+        # Storage backend stats (if available)
+        backend_type = settings.storage.backend
+        stats = {
+            "storage_backend": backend_type,
+            "deprecated_cache_stats": viz_service.deprecated_cache.get_stats(),
+        }
+        return JSONResponse(content=stats)
     except Exception as e:
         logger.error(f"Error fetching cache stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -456,8 +449,8 @@ if __name__ == "__main__":
     logger.info("Starting FastAPI server")
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=settings.api.host,
+        port=settings.api.port,
         log_level="info",
     )
 
