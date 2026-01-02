@@ -5,8 +5,8 @@ import type { SignalData } from '../types/vibe';
 
 interface SignalsChartProps {
   signals: SignalData[];
-  selectedCategory: string | null;
-  onSelectCategory: (category: string | null) => void;
+  selectedCategories: Set<string>;
+  onSelectCategory: (category: string) => void;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -21,7 +21,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   politics: '#fbcfe8',
 };
 
-export const SignalsChart = ({ signals, selectedCategory, onSelectCategory }: SignalsChartProps) => {
+export const SignalsChart = ({ signals, selectedCategories, onSelectCategory }: SignalsChartProps) => {
   const chartData = useMemo(() => {
     return signals.map((signal) => ({
       category: signal.category,
@@ -62,7 +62,12 @@ export const SignalsChart = ({ signals, selectedCategory, onSelectCategory }: Si
           valueScale={{ type: 'linear', min: -1, max: 1 }}
           colors={(bar) => {
             const item = chartData.find((d) => d.category === bar.indexValue);
-            return item?.color || '#64748b';
+            const baseColor = item?.color || '#64748b';
+            // If not selected and there are selections, dim it
+            if (selectedCategories.size > 0 && !selectedCategories.has(bar.indexValue as string)) {
+              return '#d1d5db';
+            }
+            return baseColor;
           }}
           borderColor={{ from: 'color', modifiers: [['darker', 1.6]] }}
           axisTop={null}
@@ -83,11 +88,7 @@ export const SignalsChart = ({ signals, selectedCategory, onSelectCategory }: Si
           enableLabel={false}
           onClick={(node) => {
             const category = node.indexValue as string;
-            if (selectedCategory === category) {
-              onSelectCategory(null);
-            } else {
-              onSelectCategory(category);
-            }
+            onSelectCategory(category);
           }}
           tooltip={({ indexValue, value }) => (
             <div className="bg-white p-3 border border-gray-300 rounded shadow-lg">

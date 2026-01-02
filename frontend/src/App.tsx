@@ -17,6 +17,19 @@ const MOCK_LOCATIONS = [
 function App() {
   const [selectedLocation, setSelectedLocation] = useState('stockholm');
   const [selectedTimestamp, setSelectedTimestamp] = useState<string | null>(null);
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
+
+  const handleSelectCategory = (category: string) => {
+    setSelectedCategories((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(category)) {
+        newSet.delete(category);
+      } else {
+        newSet.add(category);
+      }
+      return newSet;
+    });
+  };
 
   const {
     data: currentData,
@@ -102,6 +115,8 @@ function App() {
                 imageUrl={activeData.image_url}
                 hitboxes={activeData.hitboxes}
                 alt={`${activeData.location} vibe`}
+                selectedCategories={selectedCategories}
+                onSelectCategory={handleSelectCategory}
               />
               <Text size="xs" c="dimmed" mt="md" className="text-center">
                 Click on elements in the image to view related news articles
@@ -109,7 +124,7 @@ function App() {
             </div>
 
             {/* Signals and headlines */}
-            <SignalsPanel signals={activeData.signals} />
+            <SignalsPanel signals={activeData.signals} selectedCategories={selectedCategories} onSelectCategory={handleSelectCategory} />
           </div>
         )}
 

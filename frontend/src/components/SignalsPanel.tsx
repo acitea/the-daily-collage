@@ -7,15 +7,16 @@ import type { SignalData } from '../types/vibe';
 
 interface SignalsPanelProps {
   signals: SignalData[];
+  selectedCategories: Set<string>;
+  onSelectCategory: (category: string) => void;
 }
 
-export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+export const SignalsPanel = ({ signals, selectedCategories, onSelectCategory }: SignalsPanelProps) => {
   const [isChartOpen, setIsChartOpen] = useState(true);
 
-  // Get filtered articles based on selected category
+  // Get filtered articles based on selected categories
   const filteredArticles = useMemo(() => {
-    if (!selectedCategory) {
+    if (selectedCategories.size === 0) {
       return signals.flatMap((signal) =>
         signal.articles.map((article) => ({
           ...article,
@@ -26,16 +27,17 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
       );
     }
 
-    const signal = signals.find((s) => s.category === selectedCategory);
-    return signal
-      ? signal.articles.map((article) => ({
+    return signals
+      .filter((s) => selectedCategories.has(s.category))
+      .flatMap((signal) =>
+        signal.articles.map((article) => ({
           ...article,
           category: signal.category,
           tag: signal.tag,
           score: signal.score,
         }))
-      : [];
-  }, [signals, selectedCategory]);
+      );
+  }, [signals, selectedCategories]);
 
   return (
     <div className="space-y-6">
@@ -54,8 +56,8 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
         <Collapse in={isChartOpen}>
           <SignalsChart 
             signals={signals} 
-            selectedCategory={selectedCategory}
-            onSelectCategory={setSelectedCategory}
+            selectedCategories={selectedCategories}
+            onSelectCategory={onSelectCategory}
           />
         </Collapse>
       </div>
