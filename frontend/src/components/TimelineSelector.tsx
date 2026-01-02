@@ -51,22 +51,22 @@ export const TimelineSelector = ({
   const getTickHeight = (type: 'day' | 'week' | 'month') => {
     switch (type) {
       case 'month':
-        return 'h-8';
+        return 'h-12';
       case 'week':
-        return 'h-6';
+        return 'h-10';
       default:
-        return 'h-4';
+        return 'h-8';
     }
   };
 
   const getTickWidth = (type: 'day' | 'week' | 'month') => {
     switch (type) {
       case 'month':
-        return 'w-1';
+        return 'w-2';
       case 'week':
-        return 'w-0.5';
+        return 'w-1.5';
       default:
-        return 'w-px';
+        return 'w-1';
     }
   };
 

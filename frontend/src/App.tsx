@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Container, Loader, Alert, Card, Text, Badge, Group } from '@mantine/core';
+import { Loader, Alert, Card, Text, Badge, Group } from '@mantine/core';
 import { IconAlertCircle, IconClock, IconCheck } from '@tabler/icons-react';
 import { LocationHeader } from './components/LocationHeader';
 import { TimelineSelector } from './components/TimelineSelector';
@@ -36,35 +36,47 @@ function App() {
   const error = isHistoricalMode ? historicalError : currentError;
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="min-h-screen bg-white">
       {/* Header with logo and title */}
-      <header className="bg-gradient-to-r from-blue-600 to-purple-600 text-white py-6 shadow-lg">
-        <Container size="xl">
-          <Text size="xl" fw={700} className="text-center">
-            🎨 The Daily Collage
+      <header className="bg-black text-white py-8 border-b border-gray-300">
+        <div className="max-w-7xl mx-auto px-4">
+          <Text size="xl" fw={700} className="text-center font-serif">
+            THE DAILY COLLAGE
           </Text>
-          <Text size="sm" className="text-center opacity-90 mt-1">
-            Real-time news vibes visualized
+          <Text size="sm" className="text-center text-gray-400 mt-2 tracking-wider">
+            REAL-TIME NEWS VIBES VISUALIZED
           </Text>
-        </Container>
+        </div>
       </header>
 
       {/* Location selector */}
-      <LocationHeader
-        locations={MOCK_LOCATIONS}
-        selectedLocation={selectedLocation}
-        onLocationChange={setSelectedLocation}
-      />
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="py-3">
+            <Text size="xs" fw={600} className="text-gray-600 uppercase tracking-widest mb-3">
+              Select Location
+            </Text>
+            <LocationHeader
+              locations={MOCK_LOCATIONS}
+              selectedLocation={selectedLocation}
+              onLocationChange={setSelectedLocation}
+            />
+          </div>
+        </div>
+      </div>
 
       {/* Timeline selector */}
-      <TimelineSelector
-        selectedTimestamp={selectedTimestamp}
-        onTimestampSelect={setSelectedTimestamp}
-        currentTimestamp={currentData?.timestamp || new Date().toISOString()}
-      />
+      <div className="bg-gray-50 border-b border-gray-300">
+        <TimelineSelector
+          selectedTimestamp={selectedTimestamp}
+          onTimestampSelect={setSelectedTimestamp}
+          currentTimestamp={currentData?.timestamp || new Date().toISOString()}
+        />
+      </div>
 
       {/* Main content */}
-      <Container size="xl" className="py-6">
+      <div className="bg-white py-8">
+        <div className="max-w-4xl mx-auto px-4">
         {isLoading && (
           <div className="flex justify-center items-center py-20">
             <Loader size="xl" />
@@ -134,18 +146,19 @@ function App() {
             </Text>
           </Card>
         )}
-      </Container>
+      </div>
 
+      </div>
       {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 py-6 mt-12">
-        <Container size="xl">
-          <Text size="sm" c="dimmed" ta="center">
-            The Daily Collage - A proof-of-concept news visualization system
+      <footer className="bg-gray-900 text-gray-400 border-t border-gray-700 py-6 mt-12">
+        <div className="max-w-7xl mx-auto px-4">
+          <Text size="sm" ta="center" className="text-gray-500">
+            The Daily Collage — A proof-of-concept news visualization system
           </Text>
-          <Text size="xs" c="dimmed" ta="center" mt="xs">
+          <Text size="xs" ta="center" mt="xs" className="text-gray-600">
             Updates every 6 hours • Powered by GDELT & Stability AI
           </Text>
-        </Container>
+        </div>
       </footer>
     </div>
   );

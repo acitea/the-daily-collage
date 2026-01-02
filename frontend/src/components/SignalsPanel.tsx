@@ -9,15 +9,15 @@ interface SignalsPanelProps {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  emergencies: '#ef4444',
-  crime: '#f97316',
-  festivals: '#a855f7',
-  transportation: '#3b82f6',
-  weather_temp: '#eab308',
-  weather_wet: '#06b6d4',
-  sports: '#10b981',
-  economics: '#8b5cf6',
-  politics: '#ec4899',
+  emergencies: '#7c2d12',
+  crime: '#7c2d12',
+  festivals: '#6b7280',
+  transportation: '#374151',
+  weather_temp: '#78716c',
+  weather_wet: '#57534e',
+  sports: '#4b5563',
+  economics: '#1f2937',
+  politics: '#374151',
 };
 
 export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
@@ -34,7 +34,6 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
 
   const filteredArticles = useMemo(() => {
     if (!selectedCategory) {
-      // Show all articles from all signals
       return signals.flatMap((signal) =>
         signal.articles.map((article) => ({
           ...article,
@@ -55,17 +54,18 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
   }, [signals, selectedCategory]);
 
   return (
-    <div className="grid lg:grid-cols-2 gap-6">
+    <div className="grid lg:grid-cols-2 gap-8">
       {/* Bar Chart */}
-      <Card shadow="sm" padding="lg" radius="md" withBorder>
+      <Card shadow="sm" padding="lg" radius="md" className="border border-gray-300">
         <Group justify="space-between" mb="md">
-          <Text size="lg" fw={600}>
+          <Text size="lg" fw={600} className="font-serif text-gray-900">
             Signal Intensities
           </Text>
           {selectedCategory && (
             <Button
               size="xs"
-              variant="light"
+              variant="default"
+              className="bg-gray-800 text-white hover:bg-gray-900"
               onClick={() => setSelectedCategory(null)}
             >
               Clear Filter
@@ -75,26 +75,28 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
 
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis
               dataKey="category"
               angle={-45}
               textAnchor="end"
               height={100}
-              tick={{ fontSize: 12 }}
+              tick={{ fontSize: 12, fill: '#4b5563' }}
             />
-            <YAxis domain={[0, 1]} />
+            <YAxis domain={[0, 1]} tick={{ fontSize: 12, fill: '#4b5563' }} />
             <Tooltip
               content={({ active, payload }) => {
                 if (active && payload && payload.length) {
                   const data = payload[0].payload;
                   return (
-                    <div className="bg-white p-2 border border-gray-200 rounded shadow-lg">
-                      <Text size="sm" fw={600}>
+                    <div className="bg-white p-2 border border-gray-300 rounded shadow-lg">
+                      <Text size="sm" fw={600} className="text-gray-900">
                         {data.category}
                       </Text>
-                      <Text size="sm">Score: {data.score.toFixed(2)}</Text>
-                      <Text size="sm" c="dimmed">
+                      <Text size="sm" className="text-gray-700">
+                        Score: {data.score.toFixed(2)}
+                      </Text>
+                      <Text size="sm" c="dimmed" className="text-gray-600">
                         {data.tag}
                       </Text>
                     </div>
@@ -123,25 +125,27 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
           </BarChart>
         </ResponsiveContainer>
 
-        <Text size="xs" c="dimmed" mt="md">
+        <Text size="xs" c="dimmed" mt="md" className="text-gray-600">
           Click a bar to filter headlines by category
         </Text>
       </Card>
 
       {/* Headlines List */}
-      <Card shadow="sm" padding="lg" radius="md" withBorder>
+      <Card shadow="sm" padding="lg" radius="md" className="border border-gray-300">
         <Group justify="space-between" mb="md">
           <div>
-            <Text size="lg" fw={600}>
+            <Text size="lg" fw={600} className="font-serif text-gray-900">
               Headlines
             </Text>
             {selectedCategory && (
-              <Badge color={CATEGORY_COLORS[selectedCategory]} mt="xs">
+              <Badge color="dark" mt="xs" className="bg-gray-800">
                 {selectedCategory}
               </Badge>
             )}
           </div>
-          <Badge variant="light">{filteredArticles.length} articles</Badge>
+          <Badge variant="light" className="bg-gray-100 text-gray-800">
+            {filteredArticles.length} articles
+          </Badge>
         </Group>
 
         <Stack gap="md" className="max-h-[400px] overflow-y-auto">
@@ -154,28 +158,29 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
                 <Group justify="space-between" align="start" mb="xs">
                   <Badge
                     size="xs"
-                    color={CATEGORY_COLORS[article.category]}
+                    color="gray"
+                    className="bg-gray-200 text-gray-800"
                   >
                     {article.category}
                   </Badge>
-                  <Text size="xs" c="dimmed">
+                  <Text size="xs" c="dimmed" className="text-gray-600">
                     {article.tag}
                   </Text>
                 </Group>
-                
+
                 <Anchor
                   href={article.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-start gap-2"
                 >
-                  <Text size="sm" className="flex-1">
+                  <Text size="sm" className="flex-1 text-gray-900 font-medium">
                     {article.title}
                   </Text>
-                  <IconExternalLink size={14} className="mt-0.5 flex-shrink-0" />
+                  <IconExternalLink size={14} className="mt-0.5 flex-shrink-0 text-gray-500" />
                 </Anchor>
-                
-                <Text size="xs" c="dimmed" mt="xs">
+
+                <Text size="xs" c="dimmed" mt="xs" className="text-gray-600">
                   {article.source}
                   {article.published_at &&
                     ` • ${new Date(article.published_at).toLocaleDateString()}`}
@@ -183,7 +188,7 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
               </div>
             ))
           ) : (
-            <Text c="dimmed" ta="center">
+            <Text c="dimmed" ta="center" className="text-gray-500">
               No headlines available
             </Text>
           )}
