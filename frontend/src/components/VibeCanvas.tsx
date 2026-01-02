@@ -61,17 +61,31 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
         />
 
         {/* Colored overlays for selected/hovered areas - show full color */}
-        {(hoveredCategory || selectedCategories.size > 0) && (
+        {hoveredCategory && (
           <img
             src={imageUrl}
             alt={alt}
             className="absolute top-0 left-0 w-full h-auto pointer-events-none"
             style={{
-              clipPath: getClipPath(hoveredCategory, selectedCategories, hitboxes, imageSize),
+              clipPath: getClipPathForCategory(hoveredCategory, hitboxes, imageSize),
               transition: 'clip-path 200ms ease-out',
             }}
           />
         )}
+        
+        {/* Create separate overlay for each selected category */}
+        {!hoveredCategory && Array.from(selectedCategories).map((category) => (
+          <img
+            key={`overlay-${category}`}
+            src={imageUrl}
+            alt={alt}
+            className="absolute top-0 left-0 w-full h-auto pointer-events-none"
+            style={{
+              clipPath: getClipPathForCategory(category, hitboxes, imageSize),
+              transition: 'clip-path 200ms ease-out',
+            }}
+          />
+        ))}
         
         {imageSize.width > 0 && hitboxes.map((hitbox, idx) => {
           const scaled = getScaledHitbox(hitbox);
@@ -110,8 +124,8 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
                 }}
               />
               
-              {/* Category label on hover */}
-              {isHovered && (
+              {/* Category label on hover or when selected */}
+              {(isHovered || isSelected) && (
                 <div
                   className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 text-white px-3 py-1 rounded text-sm font-semibold whitespace-nowrap z-10 pointer-events-none"
                   style={{ backgroundColor: categoryColor }}
@@ -130,17 +144,14 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
   );
 }
 
-// Helper function to generate clip-path for multiple selected categories
-function getClipPath(hoveredCategory: string | null, selectedCategories: Set<string>, hitboxes: Hitbox[], imageSize: { width: number; height: number }): string {
+// Helper function to generate clip-path for a single category
+function getClipPathForCategory(category: string, hitboxes: Hitbox[], imageSize: { width: number; height: number }): string {
   if (!imageSize.width || !imageSize.height) return 'none';
   
-  const categoriesToShow = hoveredCategory ? new Set([hoveredCategory]) : selectedCategories;
-  if (categoriesToShow.size === 0) return 'none';
-  
-  const relevantHitboxes = hitboxes.filter((h) => categoriesToShow.has(h.category));
+  const relevantHitboxes = hitboxes.filter((h) => h.category === category);
   if (relevantHitboxes.length === 0) return 'none';
   
-  // Create polygon points for all relevant hitboxes
+  // Create polygon points for all hitboxes of this category
   const points = relevantHitboxes
     .map((h) => {
       const xPercent = (h.x / imageSize.width) * 100;
