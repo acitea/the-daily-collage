@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Loader, Alert, Card, Text, Badge, Group } from '@mantine/core';
-import { IconAlertCircle, IconClock, IconCheck } from '@tabler/icons-react';
+import { Loader, Alert, Card, Text } from '@mantine/core';
+import { IconAlertCircle } from '@tabler/icons-react';
 import { LocationHeader } from './components/LocationHeader';
 import { TimelineSelector } from './components/TimelineSelector';
 import { VibeCanvas } from './components/VibeCanvas';
@@ -96,43 +96,17 @@ function App() {
 
         {activeData && !isLoading && (
           <div className="space-y-6">
-            {/* Info banner */}
-            <Card shadow="sm" padding="md" radius="md" withBorder>
-              <Group justify="space-between">
-                <div>
-                  <Text size="sm" fw={500}>
-                    {activeData.location} • {activeData.time_window}
-                  </Text>
-                  <Group gap="xs" mt="xs">
-                    <IconClock size={14} className="text-gray-500" />
-                    <Text size="xs" c="dimmed">
-                      {new Date(activeData.timestamp).toLocaleString()}
-                    </Text>
-                  </Group>
-                </div>
-                <Badge
-                  leftSection={activeData.cached ? <IconCheck size={14} /> : null}
-                  color={activeData.cached ? 'green' : 'blue'}
-                >
-                  {activeData.cached ? 'Cached' : 'Fresh'}
-                </Badge>
-              </Group>
-            </Card>
-
             {/* Vibe canvas */}
-            <Card shadow="sm" padding="lg" radius="md" withBorder>
-              <Text size="lg" fw={600} mb="md">
-                City Vibe Visualization
-              </Text>
+            <div>
               <VibeCanvas
                 imageUrl={activeData.image_url}
                 hitboxes={activeData.hitboxes}
                 alt={`${activeData.location} vibe`}
               />
-              <Text size="xs" c="dimmed" mt="md">
+              <Text size="xs" c="dimmed" mt="md" className="text-center">
                 Click on elements in the image to view related news articles
               </Text>
-            </Card>
+            </div>
 
             {/* Signals and headlines */}
             <SignalsPanel signals={activeData.signals} />
