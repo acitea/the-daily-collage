@@ -1,6 +1,11 @@
 import { ScrollArea, Text, SegmentedControl, Group } from '@mantine/core';
 import { useMemo, useState } from 'react';
-import type { TimelinePoint } from '../types/vibe';
+interface TimelinePoint {
+  timestamp: string;
+  date: Date;
+  label: string;
+  type: 'day' | 'week' | 'month' | 'interval';
+}
 
 interface TimelineSelectorProps {
   selectedTimestamp: string | null;
@@ -30,6 +35,7 @@ export const TimelineSelector = ({
     const now = new Date();
 
     // Generate timeline: last 30 days with day/week/month markers
+    // Also include 6-hour interval tickers between dates
     // Going backwards from oldest to newest
     for (let i = 30; i >= 0; i--) {
       const date = new Date(now);
@@ -62,30 +68,60 @@ export const TimelineSelector = ({
               : date.getDate().toString(),
         type,
       });
+
+      // Add 6-hour interval tickers (0.25, 0.5, 0.75 days forward)
+      for (let hour = 6; hour < 24; hour += 6) {
+        const intervalDate = new Date(date);
+        intervalDate.setHours(hour, 0, 0, 0);
+
+        points.push({
+          timestamp: intervalDate.toISOString(),
+          date: intervalDate,
+          label: '',
+          type: 'interval',
+        });
+      }
     }
 
     return points;
   }, [weekStart]);
 
-  const getTickHeight = (type: 'day' | 'week' | 'month') => {
+  const getTickHeight = (type: 'day' | 'week' | 'month' | 'interval') => {
     switch (type) {
       case 'month':
         return 'h-12';
       case 'week':
         return 'h-10';
+      case 'interval':
+        return 'h-6';
       default:
         return 'h-8';
     }
   };
 
-  const getTickWidth = (type: 'day' | 'week' | 'month') => {
+  const getTickWidth = (type: 'day' | 'week' | 'month' | 'interval') => {
     switch (type) {
       case 'month':
         return 'w-2';
       case 'week':
         return 'w-1.5';
+      case 'interval':
+        return 'w-0.5';
       default:
         return 'w-1';
+    }
+  };
+
+  const getHoverTickWidth = (type: 'day' | 'week' | 'month' | 'interval') => {
+    switch (type) {
+      case 'month':
+        return 'hover:w-3';
+      case 'week':
+        return 'hover:w-2.5';
+      case 'interval':
+        return 'hover:w-1.5';
+      default:
+        return 'hover:w-2';
     }
   };
 
@@ -108,11 +144,12 @@ export const TimelineSelector = ({
         </Group>
 
         <ScrollArea>
-          <div className="flex gap-3 pb-4 min-w-max">
+          <div className="flex gap-1 pb-4 min-w-max">
             {timelinePoints.map((point, idx) => {
               const isSelected = selectedTimestamp === point.timestamp;
               const isCurrent = point.timestamp === currentTimestamp;
               const dayOfWeekName = point.date.toLocaleDateString('en-US', { weekday: 'short' });
+              const isInterval = point.type === 'interval';
 
               // Determine text color based on state - using Mantine color system
               const labelColor = isSelected ? 'black' : 'dark';
@@ -125,31 +162,43 @@ export const TimelineSelector = ({
                   onClick={() => onTimestampSelect(point.timestamp)}
                   title={point.date.toLocaleDateString()}
                 >
-                  {/* Row 1: Month/Week Label */}
-                  <div className="h-4 flex items-center">
-                    {(point.type === 'week' || point.type === 'month') && (
-                      <Text
-                        size="xs"
-                        fw={point.type === 'month' ? 600 : 500}
-                        c={labelColor}
-                        className="whitespace-nowrap"
-                      >
-                        {point.label}
-                      </Text>
-                    )}
-                  </div>
+                  {!isInterval && (
+                    <>
+                      {/* Row 1: Month/Week Label */}
+                      <div className="h-4 flex items-center">
+                        {(point.type === 'week' || point.type === 'month') && (
+                          <Text
+                            size="xs"
+                            fw={point.type === 'month' ? 600 : 500}
+                            c={labelColor}
+                            className="whitespace-nowrap"
+                          >
+                            {point.label}
+                          </Text>
+                        )}
+                      </div>
 
-                  {/* Row 2: Day of Week (always shown, muted) */}
-                  <div className="h-4 flex items-center">
-                    <Text 
-                      size="xs" 
-                      fw={fontWeight}
-                      c="dimmed"
-                      className="whitespace-nowrap"
-                    >
-                      {dayOfWeekName}
-                    </Text>
-                  </div>
+                      {/* Row 2: Day of Week (always shown, muted) */}
+                      <div className="h-4 flex items-center">
+                        <Text 
+                          size="xs" 
+                          fw={fontWeight}
+                          c="dimmed"
+                          className="whitespace-nowrap"
+                        >
+                          {dayOfWeekName}
+                        </Text>
+                      </div>
+                    </>
+                  )}
+                  {isInterval && (
+                    <>
+                      {/* Empty space for Row 1 */}
+                      <div className="h-4" />
+                      {/* Empty space for Row 2 */}
+                      <div className="h-4" />
+                    </>
+                  )}
 
                   {/* Row 3: Tick Bar */}
                   <div
@@ -164,26 +213,38 @@ export const TimelineSelector = ({
                           ? 'bg-black opacity-100 shadow-sm'
                           : isCurrent
                             ? 'bg-gray-800 opacity-80'
-                            : 'bg-gray-400 opacity-60'
+                            : isInterval
+                              ? 'bg-gray-300 opacity-50'
+                              : 'bg-gray-400 opacity-60'
                       }
-                      hover:w-3
+                      ${getHoverTickWidth(point.type)}
                       hover:opacity-100
                       hover:bg-gray-900
                       hover:shadow-md
                     `}
                   />
 
-                  {/* Row 4: Date (always shown, bottom-aligned) */}
-                  <div className="h-4 flex items-end">
-                    <Text 
-                      size="xs" 
-                      fw={fontWeight} 
-                      c={labelColor}
-                      className="whitespace-nowrap"
-                    >
-                      {point.date.getDate()}
-                    </Text>
-                  </div>
+                  {!isInterval && (
+                    <>
+                      {/* Row 4: Date (always shown, bottom-aligned) */}
+                      <div className="h-4 flex items-end">
+                        <Text 
+                          size="xs" 
+                          fw={fontWeight} 
+                          c={labelColor}
+                          className="whitespace-nowrap"
+                        >
+                          {point.date.getDate()}
+                        </Text>
+                      </div>
+                    </>
+                  )}
+                  {isInterval && (
+                    <>
+                      {/* Empty space for Row 4 */}
+                      <div className="h-4" />
+                    </>
+                  )}
                 </div>
               );
             })}
