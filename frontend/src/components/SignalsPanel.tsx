@@ -1,8 +1,20 @@
 import { useState, useMemo } from 'react';
-import { Text, Anchor, Stack } from '@mantine/core';
+import { Text, Anchor, Table } from '@mantine/core';
 import { IconExternalLink } from '@tabler/icons-react';
 import { SignalsChart } from './SignalsChart';
 import type { SignalData } from '../types/vibe';
+
+const CATEGORY_COLORS: Record<string, string> = {
+  emergencies: '#fca5a5',
+  crime: '#fbb6ce',
+  festivals: '#a7f3d0',
+  transportation: '#93c5fd',
+  weather_temp: '#fed7aa',
+  weather_wet: '#bae6fd',
+  sports: '#c4b5fd',
+  economics: '#fde68a',
+  politics: '#fbcfe8',
+};
 
 interface SignalsPanelProps {
   signals: SignalData[];
@@ -46,53 +58,49 @@ export const SignalsPanel = ({ signals }: SignalsPanelProps) => {
 
       {/* Headlines Table */}
       <div>
-        <Text size="lg" fw={600} className="font-serif text-gray-900 mb-4">
-          Headlines
-        </Text>
-
         {filteredArticles.length > 0 ? (
-          <Stack gap="sm">
-            {filteredArticles.map((article, idx) => (
-              <div
-                key={idx}
-                className="p-4 border border-gray-200 rounded hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex items-start gap-4 justify-between">
-                  {/* Headline and link on the left */}
-                  <Anchor
-                    href={article.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-start gap-2 flex-1 min-w-0"
-                  >
-                    <Text size="sm" fw={500} className="flex-1 text-gray-900 break-words">
-                      {article.title}
-                    </Text>
-                    <IconExternalLink
-                      size={16}
-                      className="mt-0.5 flex-shrink-0 text-gray-500"
-                    />
-                  </Anchor>
-
-                  {/* Category chip and score on the right */}
-                  <div className="flex items-center gap-3 ml-4 flex-shrink-0">
-                    <div className="px-3 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-800 whitespace-nowrap">
+          <Table striped highlightOnHover withColumnBorders>
+            <Table.Thead className="border-b-2 border-gray-300">
+              <Table.Tr>
+                <Table.Th className="text-lg font-serif font-semibold text-gray-900 py-4">Headline</Table.Th>
+                <Table.Th className="text-lg font-serif font-semibold text-gray-900 text-right py-4">Category</Table.Th>
+                <Table.Th className="text-lg font-serif font-semibold text-gray-900 text-right py-4" style={{ width: '100px' }}>Score</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {filteredArticles.map((article, idx) => (
+                <Table.Tr key={idx}>
+                  <Table.Td>
+                    <Anchor
+                      href={article.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-gray-900 hover:text-blue-600"
+                    >
+                      <span>{article.title}</span>
+                      <span className='inline-block'><IconExternalLink size={14} className="flex-shrink-0" /></span>
+                    </Anchor>
+                  </Table.Td>
+                  <Table.Td className="text-right">
+                    <span 
+                      className="inline-block px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap"
+                      style={{ 
+                        backgroundColor: CATEGORY_COLORS[article.category] || '#e5e7eb',
+                        color: '#1f2937'
+                      }}
+                    >
                       {article.category}
-                    </div>
-                    <Text size="sm" fw={600} className="text-gray-900 whitespace-nowrap">
+                    </span>
+                  </Table.Td>
+                  <Table.Td className="text-right">
+                    <Text size="sm" fw={600} className="text-gray-900">
                       {article.score > 0 ? '+' : ''}{article.score.toFixed(2)}
                     </Text>
-                  </div>
-                </div>
-
-                <Text size="xs" c="dimmed" mt="xs" className="text-gray-600">
-                  {article.source}
-                  {article.published_at &&
-                    ` • ${new Date(article.published_at).toLocaleDateString()}`}
-                </Text>
-              </div>
-            ))}
-          </Stack>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
         ) : (
           <Text c="dimmed" ta="center" className="text-gray-500 py-8">
             No headlines available
