@@ -1,4 +1,4 @@
-import { ScrollArea, Text, Group, Badge } from '@mantine/core';
+import { ScrollArea, Text } from '@mantine/core';
 import { useMemo } from 'react';
 import type { TimelinePoint } from '../types/vibe';
 
@@ -16,35 +16,37 @@ export const TimelineSelector = ({
   const timelinePoints = useMemo(() => {
     const points: TimelinePoint[] = [];
     const now = new Date();
-    
+
     // Generate timeline: last 30 days with day/week/month markers
-    for (let i = 0; i <= 30; i++) {
+    // Going backwards from oldest to newest
+    for (let i = 30; i >= 0; i--) {
       const date = new Date(now);
       date.setDate(date.getDate() - i);
       date.setHours(0, 0, 0, 0);
-      
+
       const dayOfMonth = date.getDate();
       const dayOfWeek = date.getDay();
-      
+
       let type: 'day' | 'week' | 'month' = 'day';
       if (dayOfMonth === 1) {
         type = 'month';
       } else if (dayOfWeek === 0) {
         type = 'week';
       }
-      
+
       points.push({
         timestamp: date.toISOString(),
         date,
-        label: type === 'month' 
-          ? date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
-          : type === 'week'
-          ? `Week ${Math.ceil(dayOfMonth / 7)}`
-          : date.getDate().toString(),
+        label:
+          type === 'month'
+            ? date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+            : type === 'week'
+              ? `Week ${Math.ceil(dayOfMonth / 7)}`
+              : date.getDate().toString(),
         type,
       });
     }
-    
+
     return points;
   }, []);
 
@@ -71,63 +73,90 @@ export const TimelineSelector = ({
   };
 
   return (
-    <div className="border-b border-gray-200 bg-gray-50 py-4">
-      <Group justify="space-between" className="px-4 mb-2">
-        <Text size="sm" fw={500}>
-          Timeline
+    <div className="w-full border-t border-b border-gray-300 bg-white py-4 px-4">
+      <div className="max-w-4xl mx-auto">
+        <Text size="sm" fw={600} mb="md" className="text-gray-700">
+          Timeline (Last 30 Days)
         </Text>
-        <Group gap="xs">
-          <Badge
-            color={selectedTimestamp === null ? 'blue' : 'gray'}
-            variant={selectedTimestamp === null ? 'filled' : 'light'}
-            className="cursor-pointer"
-            onClick={() => onTimestampSelect(null)}
-          >
-            Current
-          </Badge>
-        </Group>
-      </Group>
-      
-      <ScrollArea className="px-4">
-        <div className="flex items-end gap-1 pb-2 min-w-max">
-          {timelinePoints.map((point, idx) => {
-            const isSelected = selectedTimestamp === point.timestamp;
-            const isCurrent = point.timestamp === currentTimestamp;
-            
-            return (
-              <div
-                key={idx}
-                className="flex flex-col items-center gap-1 cursor-pointer hover:opacity-70 transition-opacity"
-                onClick={() => onTimestampSelect(point.timestamp)}
-                title={point.date.toLocaleDateString()}
-              >
+
+        <ScrollArea>
+          <div className="flex gap-3 pb-4 min-w-max">
+            {timelinePoints.map((point, idx) => {
+              const isSelected = selectedTimestamp === point.timestamp;
+              const isCurrent = point.timestamp === currentTimestamp;
+
+              return (
                 <div
-                  className={`${getTickWidth(point.type)} ${getTickHeight(point.type)} ${
-                    isSelected
-                      ? 'bg-blue-600'
-                      : isCurrent
-                      ? 'bg-green-600'
-                      : 'bg-gray-400'
-                  }`}
-                />
-                {point.type !== 'day' && (
-                  <Text
-                    size="xs"
-                    c={isSelected ? 'blue' : 'dimmed'}
-                    fw={point.type === 'month' ? 600 : 400}
-                  >
-                    {point.label}
-                  </Text>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </ScrollArea>
-      
-      <Text size="xs" c="dimmed" className="px-4 mt-2">
-        Click a tick to view historical snapshot • Current view updates every 6 hours
-      </Text>
+                  key={idx}
+                  className="flex flex-col items-center cursor-pointer"
+                  onClick={() => onTimestampSelect(point.timestamp)}
+                  title={point.date.toLocaleDateString()}
+                >
+                  {/* Fixed label height area - ensures all ticks align to same baseline */}
+                  <div className="h-5 flex items-center mb-2">
+                    {(point.type === 'week' || point.type === 'month') && (
+                      <Text
+                        size="xs"
+                        fw={point.type === 'month' ? 600 : 500}
+                        className={`whitespace-nowrap ${
+                          isSelected
+                            ? 'text-black'
+                            : isCurrent
+                              ? 'text-gray-700'
+                              : 'text-gray-500'
+                        }`}
+                      >
+                        {point.label}
+                      </Text>
+                    )}
+                  </div>
+
+                  {/* Tick Bar - All aligned at same vertical level */}
+                  <div
+                    className={`
+                      ${getTickWidth(point.type)} 
+                      ${getTickHeight(point.type)} 
+                      rounded-sm
+                      transition-all 
+                      duration-150
+                      ${
+                        isSelected
+                          ? 'bg-black opacity-100 shadow-sm'
+                          : isCurrent
+                            ? 'bg-gray-800 opacity-80'
+                            : 'bg-gray-400 opacity-60'
+                      }
+                      hover:w-3
+                      hover:opacity-100
+                      hover:bg-gray-900
+                      hover:shadow-md
+                    `}
+                  />
+
+                  {/* Day label - Only for day type, positioned below */}
+                  {point.type === 'day' && (
+                    <div className="h-5 flex items-center mt-2">
+                      <Text
+                        size="xs"
+                        fw={400}
+                        className={`whitespace-nowrap ${
+                          isSelected ? 'text-black' : 'text-gray-500'
+                        }`}
+                      >
+                        {point.label}
+                      </Text>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </ScrollArea>
+
+        <Text size="xs" c="dimmed" className="mt-3 text-gray-600">
+          Click a tick to view historical snapshot • Current view updates every 6 hours
+        </Text>
+      </div>
     </div>
   );
 };
