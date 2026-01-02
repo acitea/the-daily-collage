@@ -1,11 +1,12 @@
-import { ScrollArea, Text, SegmentedControl, Group } from '@mantine/core';
+import { ScrollArea, Text, SegmentedControl, Group, Button, Stack } from '@mantine/core';
 import { useMemo, useState } from 'react';
-interface TimelinePoint {
-  timestamp: string;
-  date: Date;
-  label: string;
-  type: 'day' | 'week' | 'month' | 'interval';
-}
+import { DateTimePickerModal } from './TimelineSelector/DateTimePickerModal';
+import {
+  generateTimelinePoints,
+  getTickHeight,
+  getTickWidth,
+  getHoverTickWidth,
+} from './TimelineSelector/helpers';
 
 interface TimelineSelectorProps {
   selectedTimestamp: string | null;
@@ -19,129 +20,78 @@ export const TimelineSelector = ({
   currentTimestamp,
 }: TimelineSelectorProps) => {
   const [weekStart, setWeekStart] = useState<'sunday' | 'monday'>('sunday');
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
-  // Helper function to get ISO week number
-  const getWeekNumber = (date: Date): number => {
-    const tempDate = new Date(date);
-    tempDate.setHours(0, 0, 0, 0);
-    tempDate.setDate(tempDate.getDate() + 4 - (tempDate.getDay() || 7));
-    const yearStart = new Date(tempDate.getFullYear(), 0, 1);
-    const weekNum = Math.ceil(((tempDate.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-    return weekNum;
-  };
+  const timelinePoints = useMemo(() => generateTimelinePoints(weekStart), [weekStart]);
 
-  const timelinePoints = useMemo(() => {
-    const points: TimelinePoint[] = [];
-    const now = new Date();
-
-    // Generate timeline: last 30 days with day/week/month markers
-    // Also include 6-hour interval tickers between dates
-    // Going backwards from oldest to newest
-    for (let i = 30; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      date.setHours(0, 0, 0, 0);
-
-      const dayOfMonth = date.getDate();
-      let dayOfWeek = date.getDay();
-
-      // Adjust day of week based on selected week start
-      if (weekStart === 'monday') {
-        dayOfWeek = (dayOfWeek + 6) % 7;
-      }
-
-      let type: 'day' | 'week' | 'month' = 'day';
-      if (dayOfMonth === 1) {
-        type = 'month';
-      } else if (dayOfWeek === 0) {
-        type = 'week';
-      }
-
-      points.push({
-        timestamp: date.toISOString(),
-        date,
-        label:
-          type === 'month'
-            ? date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
-            : type === 'week'
-              ? `W${getWeekNumber(date)}`
-              : date.getDate().toString(),
-        type,
-      });
-
-      // Add 6-hour interval tickers (0.25, 0.5, 0.75 days forward)
-      for (let hour = 6; hour < 24; hour += 6) {
-        const intervalDate = new Date(date);
-        intervalDate.setHours(hour, 0, 0, 0);
-
-        points.push({
-          timestamp: intervalDate.toISOString(),
-          date: intervalDate,
-          label: '',
-          type: 'interval',
-        });
-      }
-    }
-
-    return points;
-  }, [weekStart]);
-
-  const getTickHeight = (type: 'day' | 'week' | 'month' | 'interval') => {
-    switch (type) {
-      case 'month':
-        return 'h-12';
-      case 'week':
-        return 'h-10';
-      case 'interval':
-        return 'h-6';
-      default:
-        return 'h-8';
-    }
-  };
-
-  const getTickWidth = (type: 'day' | 'week' | 'month' | 'interval') => {
-    switch (type) {
-      case 'month':
-        return 'w-2';
-      case 'week':
-        return 'w-1.5';
-      case 'interval':
-        return 'w-0.5';
-      default:
-        return 'w-1';
-    }
-  };
-
-  const getHoverTickWidth = (type: 'day' | 'week' | 'month' | 'interval') => {
-    switch (type) {
-      case 'month':
-        return 'hover:w-3';
-      case 'week':
-        return 'hover:w-2.5';
-      case 'interval':
-        return 'hover:w-1.5';
-      default:
-        return 'hover:w-2';
-    }
+  const handleNowClick = () => {
+    // Find the most recent (latest) timestamp
+    const latestPoint = timelinePoints[timelinePoints.length - 1];
+    onTimestampSelect(latestPoint.timestamp);
   };
 
   return (
     <div className="w-full border-t border-b border-gray-300 bg-white py-4 px-4">
       <div className="max-w-4xl mx-auto">
-        <Group justify="space-between" align="center" mb="md">
-          <Text size="sm" fw={600} c="dark" className="">
+        <Group justify="space-between" align="flex-end" mb="md">
+          <Text size="sm" fw={600} c="dark">
             Timeline (Last 30 Days)
           </Text>
-          <SegmentedControl
-            value={weekStart}
-            onChange={(value) => setWeekStart(value as 'sunday' | 'monday')}
-            data={[
-              { label: 'Sun', value: 'sunday' },
-              { label: 'Mon', value: 'monday' },
-            ]}
-            size="xs"
-          />
+          <Group gap="md" align="flex-end">
+            <Button size="xs" variant="light" color="dark" onClick={handleNowClick}>
+              Now
+            </Button>
+            <Button
+              size="xs"
+              variant="light"
+              color="dark"
+              onClick={() => setDatePickerOpen(true)}
+            >
+              Go to Date
+            </Button>
+            <Stack gap={4} align="center">
+              <Text size="xs" c="dimmed" fw={500}>
+                Week Start
+              </Text>
+              <SegmentedControl
+                value={weekStart}
+                onChange={(value) => setWeekStart(value as 'sunday' | 'monday')}
+                data={[
+                  { label: 'Sun', value: 'sunday' },
+                  { label: 'Mon', value: 'monday' },
+                ]}
+                size="xs"
+              />
+            </Stack>
+          </Group>
         </Group>
+
+        {/* Currently Selected Date/Time Display */}
+        <div className="mb-4 text-center py-3 bg-gray-50 rounded border border-gray-200">
+          <Text size="lg" fw={700} c="dark" className="font-serif">
+            {selectedTimestamp
+              ? new Date(selectedTimestamp).toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                }) +
+                ' at ' +
+                new Date(selectedTimestamp).toLocaleTimeString('en-US', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                })
+              : 'Current View (Latest)'}
+          </Text>
+        </div>
+
+        <DateTimePickerModal
+          opened={datePickerOpen}
+          onClose={() => setDatePickerOpen(false)}
+          initialValue={selectedTimestamp}
+          onSubmit={onTimestampSelect}
+        />
 
         <ScrollArea>
           <div className="flex gap-1 pb-4 min-w-max">
@@ -151,7 +101,7 @@ export const TimelineSelector = ({
               const dayOfWeekName = point.date.toLocaleDateString('en-US', { weekday: 'short' });
               const isInterval = point.type === 'interval';
 
-              // Determine text color based on state - using Mantine color system
+              // Determine text color based on state
               const labelColor = isSelected ? 'black' : 'dark';
               const fontWeight = isSelected ? 700 : 400;
 
@@ -160,7 +110,7 @@ export const TimelineSelector = ({
                   key={idx}
                   className="flex flex-col items-center justify-between cursor-pointer min-h-24"
                   onClick={() => onTimestampSelect(point.timestamp)}
-                  title={point.date.toLocaleDateString()}
+                  title={point.date.toLocaleDateString() + ' ' + point.date.toLocaleTimeString()}
                 >
                   {!isInterval && (
                     <>
@@ -178,14 +128,9 @@ export const TimelineSelector = ({
                         )}
                       </div>
 
-                      {/* Row 2: Day of Week (always shown, muted) */}
+                      {/* Row 2: Day of Week */}
                       <div className="h-4 flex items-center">
-                        <Text 
-                          size="xs" 
-                          fw={fontWeight}
-                          c="dimmed"
-                          className="whitespace-nowrap"
-                        >
+                        <Text size="xs" fw={fontWeight} c="dimmed" className="whitespace-nowrap">
                           {dayOfWeekName}
                         </Text>
                       </div>
@@ -193,9 +138,7 @@ export const TimelineSelector = ({
                   )}
                   {isInterval && (
                     <>
-                      {/* Empty space for Row 1 */}
                       <div className="h-4" />
-                      {/* Empty space for Row 2 */}
                       <div className="h-4" />
                     </>
                   )}
@@ -226,14 +169,9 @@ export const TimelineSelector = ({
 
                   {!isInterval && (
                     <>
-                      {/* Row 4: Date (always shown, bottom-aligned) */}
+                      {/* Row 4: Date */}
                       <div className="h-4 flex items-end">
-                        <Text 
-                          size="xs" 
-                          fw={fontWeight} 
-                          c={labelColor}
-                          className="whitespace-nowrap"
-                        >
+                        <Text size="xs" fw={fontWeight} c={labelColor} className="whitespace-nowrap">
                           {point.date.getDate()}
                         </Text>
                       </div>
@@ -241,7 +179,6 @@ export const TimelineSelector = ({
                   )}
                   {isInterval && (
                     <>
-                      {/* Empty space for Row 4 */}
                       <div className="h-4" />
                     </>
                   )}

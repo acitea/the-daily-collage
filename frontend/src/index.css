@@ -1,9 +1,10 @@
-@layer theme, base, mantine, components, utilities;
 @import "tailwindcss";
 @import "@mantine/core/styles.css";
+@import "@mantine/dates/styles.css";
 
 @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap');
 
+@layer theme, base, mantine, components, utilities;
 @layer base {
   body {
     @apply bg-white text-gray-900;
