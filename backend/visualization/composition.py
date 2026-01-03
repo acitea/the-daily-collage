@@ -50,6 +50,9 @@ class HybridComposer:
             image_height=settings.layout.image_height,
             assets_dir=settings.assets.assets_dir,
             bg_color=(245, 245, 250),
+            sky_zone_height=settings.layout.sky_zone_height,
+            city_zone_height=settings.layout.city_zone_height,
+            street_zone_height=settings.layout.street_zone_height,
         )
 
         # Polish engine

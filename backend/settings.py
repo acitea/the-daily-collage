@@ -6,20 +6,13 @@ configuration via environment variables with sensible defaults.
 """
 
 import os
-from enum import Enum
 from typing import Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class VibeHashSettings:
     """Settings for vibe-hash cache key generation."""
-
-    # Cache key discretization: scores are binned to nearest multiple of this
-    discretization_step: float = 0.1
-
-    # Cache TTL in seconds (86400 = 24 hours)
-    cache_ttl_seconds: int = 86400
 
     # Enable caching globally
     enable_cache: bool = True
@@ -89,31 +82,19 @@ class StorageSettings:
         "LOCAL_STORAGE_DIR", "./storage/vibes"
     )
 
-    # Metadata DB connection string (PostgreSQL, SQLite, etc.)
-    # Format: postgresql://user:password@host/dbname or sqlite:///path/to/db.sqlite
-    metadata_db_url: str = os.getenv(
-        "METADATA_DB_URL", "sqlite:///storage/metadata.db"
-    )
-
 
 @dataclass
 class HopsworksSettings:
     """Settings for Hopsworks feature store and artifact store."""
 
-    # Enable Hopsworks integration
-    enabled: bool = os.getenv("HOPSWORKS_ENABLED", "false").lower() == "true"
-
     # Hopsworks API key
     api_key: Optional[str] = os.getenv("HOPSWORKS_API_KEY", None)
 
     # Hopsworks project name
-    project_name: str = os.getenv("HOPSWORKS_PROJECT_NAME", "daily_collage")
+    project_name: str = os.getenv("HOPSWORKS_PROJECT", "daily_collage")
 
     # Hopsworks host (e.g., c.app.hopsworks.ai)
     host: Optional[str] = os.getenv("HOPSWORKS_HOST", None)
-
-    # Region (for managed Hopsworks)
-    region: str = os.getenv("HOPSWORKS_REGION", "us")
 
     # Feature group name for vibe vectors
     vibe_feature_group: str = os.getenv(
@@ -135,39 +116,19 @@ class AssetSettings:
         "ASSETS_DIR", "./backend/assets"
     )
 
-    # Enable fallback to generic category icons if tag-specific not found
-    use_fallback_icons: bool = True
-
-    # Default fallback icon if category not found
-    default_icon: str = "generic.png"
-
 
 @dataclass
 class LayoutSettings:
     """Settings for layout composition."""
 
     # Image dimensions
-    image_width: int = 1024
+    image_width: int = 1344
     image_height: int = 768
 
     # Canvas zones (as fractions of height)
     sky_zone_height: float = 0.25
     city_zone_height: float = 0.50
     street_zone_height: float = 0.25
-
-    # Padding and spacing
-    padding: int = 20
-    element_spacing: int = 30
-
-    # Scaling
-    max_element_size: int = 150
-    min_element_size: int = 30
-
-    # Intensity thresholds for size mapping
-    # intensity_to_size[0] = min, intensity_to_size[1] = max
-    intensity_min: float = 0.0
-    intensity_max: float = 1.0
-
 
 @dataclass
 class APISettings:
@@ -176,22 +137,6 @@ class APISettings:
     # Server host and port
     host: str = os.getenv("API_HOST", "0.0.0.0")
     port: int = int(os.getenv("API_PORT", "8000"))
-
-    # Enable CORS
-    enable_cors: bool = os.getenv(
-        "API_ENABLE_CORS", "true"
-    ).lower() == "true"
-
-    # Allowed CORS origins
-    cors_origins: list = field(default_factory=lambda: [
-        "http://localhost:3000",
-        "http://localhost:5173",  # Vite dev server
-    ])
-
-    # API title and description
-    title: str = "The Daily Collage API"
-    description: str = "REST API for generating location-based news visualizations"
-    version: str = "0.2.0"
 
 
 class Settings:
@@ -249,13 +194,6 @@ class Settings:
         if not os.path.exists(self.assets.assets_dir):
             issues.append(
                 f"WARNING: Assets directory not found: {self.assets.assets_dir}"
-            )
-
-        # Validate atmosphere strategy
-        valid_strategies = [s.value for s in AtmosphereStrategy]
-        if self.stability_ai.atmosphere_strategy not in valid_strategies:
-            issues.append(
-                f"ERROR: Invalid atmosphere_strategy '{self.stability_ai.atmosphere_strategy}'. Must be one of {valid_strategies}"
             )
 
         return issues

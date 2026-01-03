@@ -233,3 +233,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# **CLI Utility for Frontend Development**
+# Command-line tool to preview layouts before frontend integration.
+
+# **Usage:**
+# ```bash
+# # Generate layout for sample vibe
+# python backend/utils/generate_layout.py --city stockholm --sample active
+
+# # Use custom vibe vector
+# python backend/utils/generate_layout.py --city stockholm --vibe '{"traffic": 0.5, "weather_wet": 0.3}'
+
+# # Load from JSON file
+# python backend/utils/generate_layout.py --city stockholm --config my_vibe.json
+
+# # List available samples
+# python backend/utils/generate_layout.py --list-samples
+
+# # Save to file
+# python backend/utils/generate_layout.py --sample crisis --output layout.json
+# ```

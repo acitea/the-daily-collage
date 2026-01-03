@@ -269,17 +269,6 @@ class ZoneLayoutComposer:
     Uses grid-based randomized placement to avoid overlaps.
     Records hitbox metadata for each placed element.
     """
-
-    # Zones define vertical regions
-    ZONES = {
-        "sky": {"start_ratio": 0.0, "height_ratio": 0.25, "name": "Sky"},
-        "city": {"start_ratio": 0.25, "height_ratio": 0.50, "name": "City"},
-        "street": {
-            "start_ratio": 0.75,
-            "height_ratio": 0.25,
-            "name": "Street",
-        },
-    }
     
     # Grid configuration for placement
     GRID_COLS = 8  # More columns for flexibility
@@ -291,6 +280,9 @@ class ZoneLayoutComposer:
         image_height: int,
         assets_dir: str,
         bg_color: Tuple[int, int, int] = (245, 245, 250),
+        sky_zone_height: float = 0.25,
+        city_zone_height: float = 0.50,
+        street_zone_height: float = 0.25,
     ):
         """
         Initialize composer.
@@ -300,12 +292,34 @@ class ZoneLayoutComposer:
             image_height: Canvas height
             assets_dir: Path to assets directory
             bg_color: Background color (RGB)
+            sky_zone_height: Height of sky zone as fraction of total height
+            city_zone_height: Height of city zone as fraction of total height
+            street_zone_height: Height of street zone as fraction of total height
         """
         self.image_width = image_width
         self.image_height = image_height
         self.bg_color = bg_color
         self.asset_library = AssetLibrary(assets_dir)
         self.hitboxes: List[Hitbox] = []
+        
+        # Compute zones dynamically from settings
+        self.zones = {
+            "sky": {
+                "start_ratio": 0.0,
+                "height_ratio": sky_zone_height,
+                "name": "Sky"
+            },
+            "city": {
+                "start_ratio": sky_zone_height,
+                "height_ratio": city_zone_height,
+                "name": "City"
+            },
+            "street": {
+                "start_ratio": sky_zone_height + city_zone_height,
+                "height_ratio": street_zone_height,
+                "name": "Street"
+            },
+        }
 
     def compose(
         self,
@@ -383,7 +397,7 @@ class ZoneLayoutComposer:
         if not signals:
             return
 
-        zone = self.ZONES[zone_name]
+        zone = self.zones[zone_name]
         zone_y_start = int(self.image_height * zone["start_ratio"])
         zone_height = int(self.image_height * zone["height_ratio"])
         zone_y_end = zone_y_start + zone_height
