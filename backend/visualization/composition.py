@@ -18,7 +18,7 @@ import io
 from backend.settings import settings, AtmosphereStrategy
 from backend.visualization.assets import ZoneLayoutComposer
 from backend.visualization.polish import create_poller
-from backend.visualization.caching import VibeCache, VibeHash, LocalStorageBackend, MockS3StorageBackend
+from backend.visualization.caching import VibeCache, create_storage_backend
 from backend.visualization.atmosphere import AtmosphereDescriptor
 
 logger = logging.getLogger(__name__)
@@ -186,20 +186,25 @@ class VisualizationService:
     4. Return image URL + hitboxes
     """
 
-    def __init__(self):
-        """Initialize service with composer and cache."""
+    def __init__(self, hopsworks_service=None):
+        """
+        Initialize service with composer and cache.
+        
+        Args:
+            hopsworks_service: Optional HopsworksService instance for hopsworks backend
+        """
         logger.info("Initializing VisualizationService")
 
         self.composer = HybridComposer()
 
-        # Initialize storage backend
-        if settings.storage.backend == "local":
-            storage = LocalStorageBackend(settings.storage.local_storage_dir)
-        elif settings.storage.backend in ("s3", "minio"):
-            storage = MockS3StorageBackend(settings.storage.bucket_name)
-        else:
-            logger.warning(f"Unknown storage backend: {settings.storage.backend}, using local")
-            storage = LocalStorageBackend(settings.storage.local_storage_dir)
+        # Initialize storage backend using factory
+        storage = create_storage_backend(
+            backend_type=settings.storage.backend,
+            bucket_name=settings.storage.bucket_name,
+            local_storage_dir=settings.storage.local_storage_dir,
+            hopsworks_service=hopsworks_service,
+            artifact_collection=settings.hopsworks.artifact_collection,
+        )
 
         self.cache = VibeCache(storage)
 
@@ -233,7 +238,7 @@ class VisualizationService:
 
         # Check cache
         if not force_regenerate and settings.vibe_hash.enable_cache:
-            image_data, metadata = self.cache.get(city, timestamp, vibe_vector)
+            image_data, metadata = self.cache.get(city, timestamp)
             if image_data and metadata:
                 logger.info(f"Cache hit for {city}")
                 return image_data, {
@@ -252,9 +257,9 @@ class VisualizationService:
         image_url, metadata = self.cache.set(
             city=city,
             timestamp=timestamp,
-            vibe_vector=vibe_vector,
             image_data=image_data,
             hitboxes=hitboxes,
+            vibe_vector=vibe_vector,
             source_articles=source_articles or [],
         )
 

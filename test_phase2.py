@@ -39,14 +39,9 @@ def test_vibe_hash():
     
     city = "stockholm"
     timestamp = datetime(2025, 12, 11, 3, 30, 0)
-    vibe_vector = {
-        "traffic": 0.45,
-        "weather_temp": -0.2,
-        "crime": 0.1,
-    }
     
-    hash1 = VibeHash.generate(city, timestamp, vibe_vector)
-    hash2 = VibeHash.generate(city, timestamp, vibe_vector)
+    hash1 = VibeHash.generate(city, timestamp)
+    hash2 = VibeHash.generate(city, timestamp)
     
     print(f"First hash:  {hash1}")
     print(f"Second hash: {hash2}")
@@ -101,19 +96,19 @@ def test_cache():
     hitboxes = [{"x": 10, "y": 20, "width": 100, "height": 100}]
     
     print(f"Setting cache for {city}...")
-    url, meta = cache.set(city, timestamp, vibe_vector, image_data, hitboxes)
+    url, meta = cache.set(city, timestamp, image_data, hitboxes, vibe_vector)
     print(f"✓ Cache URL: {url}")
     print(f"✓ Vibe hash: {meta.vibe_hash}")
     
     print(f"Getting cache for {city}...")
-    retrieved_image, retrieved_meta = cache.get(city, timestamp, vibe_vector)
+    retrieved_image, retrieved_meta = cache.get(city, timestamp)
     
     assert retrieved_image == image_data, "Should retrieve same image"
     print(f"✓ Retrieved image: {len(retrieved_image)} bytes")
     print(f"✓ Retrieved metadata: {retrieved_meta.vibe_hash}")
     
     print(f"Checking cache exists...")
-    exists = cache.exists(city, timestamp, vibe_vector)
+    exists = cache.exists(city, timestamp)
     assert exists, "Cache should exist"
     print(f"✓ Cache exists check passed")
 

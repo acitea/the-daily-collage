@@ -7,7 +7,6 @@ Handles image generation and composition for news visualizations.
 from .composition import (
     VisualizationService,
     HybridComposer,
-    VisualizationCache,
     SignalIntensity,
 )
 from .caching import (

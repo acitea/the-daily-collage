@@ -165,7 +165,7 @@ def generate_layout(city: str, vibe_vector: dict) -> dict:
 
     # Generate vibe hash
     timestamp = datetime.utcnow()
-    vibe_hash = VibeHash.generate(city, timestamp, vibe_vector)
+    vibe_hash = VibeHash.generate(city, timestamp)
 
     # Build output
     output = {

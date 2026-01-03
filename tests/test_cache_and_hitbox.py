@@ -26,70 +26,46 @@ class TestVibeHashDeterminism:
     """Test that vibe hashes are deterministic."""
 
     def test_same_vector_produces_same_hash(self):
-        """Same vibe vector should always produce same hash."""
+        """Same location and time should always produce same hash."""
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        vibe_vector = {
-            "traffic": 0.45,
-            "weather_temp": -0.2,
-            "crime": 0.1,
-        }
 
-        hash1 = VibeHash.generate(city, timestamp, vibe_vector)
-        hash2 = VibeHash.generate(city, timestamp, vibe_vector)
+        hash1 = VibeHash.generate(city, timestamp)
+        hash2 = VibeHash.generate(city, timestamp)
 
         assert hash1 == hash2, "Same input should produce same hash"
 
-    def test_different_scores_produce_different_hash(self):
-        """Different scores should produce different hashes."""
+    def test_different_scores_produce_same_hash(self):
+        """Hash is now independent of signal scores."""
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
 
-        v1 = {"traffic": 0.45, "weather_temp": -0.2}
-        v2 = {"traffic": 0.46, "weather_temp": -0.2}
+        # Hash should be same regardless of vibe vectors
+        hash1 = VibeHash.generate(city, timestamp)
+        hash2 = VibeHash.generate(city, timestamp)
 
-        hash1 = VibeHash.generate(city, timestamp, v1)
-        hash2 = VibeHash.generate(city, timestamp, v2)
-
-        assert hash1 != hash2, "Different scores should produce different hashes"
-
-    def test_hash_discretizes_scores(self):
-        """Scores within discretization step should hash the same."""
-        city = "stockholm"
-        timestamp = datetime(2025, 12, 11, 3, 30, 0)
-
-        # Scores within 0.1 of each other should discretize to same value
-        v1 = {"traffic": 0.450}
-        v2 = {"traffic": 0.451}
-
-        hash1 = VibeHash.generate(city, timestamp, v1)
-        hash2 = VibeHash.generate(city, timestamp, v2)
-
-        # Should be same due to discretization
-        assert hash1 == hash2, f"Scores within discretization step should hash same: {hash1} vs {hash2}"
+        assert hash1 == hash2, "Same city/time should produce same hash"
 
     def test_different_cities_produce_different_hash(self):
         """Different cities should produce different hashes."""
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        vibe_vector = {"traffic": 0.45}
 
-        hash1 = VibeHash.generate("stockholm", timestamp, vibe_vector)
-        hash2 = VibeHash.generate("gothenburg", timestamp, vibe_vector)
+        hash1 = VibeHash.generate("stockholm", timestamp)
+        hash2 = VibeHash.generate("gothenburg", timestamp)
 
         assert hash1 != hash2, "Different cities should produce different hashes"
 
     def test_different_windows_produce_different_hash(self):
         """Different time windows should produce different hashes."""
         city = "stockholm"
-        vibe_vector = {"traffic": 0.45}
 
         # Window 0 (00:00-06:00)
         ts1 = datetime(2025, 12, 11, 3, 30, 0)
         # Window 1 (06:00-12:00)
         ts2 = datetime(2025, 12, 11, 9, 30, 0)
 
-        hash1 = VibeHash.generate(city, ts1, vibe_vector)
-        hash2 = VibeHash.generate(city, ts2, vibe_vector)
+        hash1 = VibeHash.generate(city, ts1)
+        hash2 = VibeHash.generate(city, ts2)
 
         assert hash1 != hash2, "Different time windows should produce different hashes"
 
@@ -97,13 +73,12 @@ class TestVibeHashDeterminism:
         """Hash should have expected format."""
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        vibe_vector = {"traffic": 0.45}
 
-        vibe_hash = VibeHash.generate(city, timestamp, vibe_vector)
+        cache_key = VibeHash.generate(city, timestamp)
 
-        # Format: city_date_window_hash
-        parts = vibe_hash.split("_")
-        assert len(parts) >= 4, f"Hash should have >=4 parts: {vibe_hash}"
+        # Format: city_date_window
+        parts = cache_key.split("_")
+        assert len(parts) == 3, f"Key should have 3 parts: {cache_key}"
         assert parts[0] == "stockholm"
         assert "-" in parts[1]  # Date format YYYY-MM-DD
         assert "-" in parts[2]  # Window format HH-HH
@@ -113,7 +88,7 @@ class TestCacheDeterminism:
     """Test that cache behaves deterministically."""
 
     def test_cache_hit_deterministic(self):
-        """Retrieving same vibe twice should hit cache both times."""
+        """Retrieving same location/time twice should hit cache both times."""
         storage = LocalStorageBackend(":memory:")  # In-memory for testing
         cache = VibeCache(storage)
 
@@ -121,19 +96,19 @@ class TestCacheDeterminism:
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
         vibe_vector = {"traffic": 0.45}
         image_data = b"fake_image_data"
-        hitboxes = [{"x": 10, "y": 20, "width": 100, "height": 100}]
+        hitboxes = [{"x": 100, "y": 150, "w": 50, "h": 50}]
 
         # Store
-        url1, meta1 = cache.set(city, timestamp, vibe_vector, image_data, hitboxes)
+        url1, meta1 = cache.set(city, timestamp, image_data, hitboxes, vibe_vector)
 
         # Retrieve same
-        img2, meta2 = cache.get(city, timestamp, vibe_vector)
+        img2, meta2 = cache.get(city, timestamp)
 
         assert img2 == image_data, "Should retrieve same image"
         assert meta2 is not None, "Should retrieve metadata"
 
-    def test_cache_miss_after_invalidation(self):
-        """Cache should miss if vibe_vector differs."""
+    def test_cache_always_hits_same_location_time(self):
+        """Cache should always hit for same location and time."""
         storage = LocalStorageBackend(":memory:")
         cache = VibeCache(storage)
 
@@ -143,28 +118,29 @@ class TestCacheDeterminism:
         image_data = b"fake_image"
         hitboxes = []
 
-        cache.set(city, timestamp, v1, image_data, hitboxes)
+        cache.set(city, timestamp, image_data, hitboxes, v1)
 
-        # Try with different vector
-        v2 = {"traffic": 0.46}
-        img_result, meta_result = cache.get(city, timestamp, v2)
+        # Should retrieve even with different vibe vector (cache is location/time based)
+        img_result, meta_result = cache.get(city, timestamp)
 
-        assert img_result is None, "Should not retrieve with different vibe vector"
+        assert img_result == image_data, "Should retrieve for same location/time"
+        assert meta_result is not None, "Should have metadata"
 
     def test_cache_exists_check(self):
         """Cache exists() should match set/get behavior."""
-        storage = LocalStorageBackend(":memory:")
+        # Use MockS3 for proper isolation
+        storage = MockS3StorageBackend("test-bucket")
         cache = VibeCache(storage)
 
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
         vibe_vector = {"traffic": 0.45}
 
-        assert not cache.exists(city, timestamp, vibe_vector), "Should not exist initially"
+        assert not cache.exists(city, timestamp), "Should not exist initially"
 
-        cache.set(city, timestamp, vibe_vector, b"image", [])
+        cache.set(city, timestamp, b"image", [], vibe_vector)
 
-        assert cache.exists(city, timestamp, vibe_vector), "Should exist after set"
+        assert cache.exists(city, timestamp), "Should exist after set"
 
 
 class TestHitboxStability:

@@ -73,9 +73,17 @@ class StabilityAISettings:
 
 @dataclass
 class StorageSettings:
-    """Settings for persistent storage (S3/MinIO and metadata DB)."""
+    """
+    Settings for persistent storage (S3/MinIO/Hopsworks and metadata DB).
+    
+    Supported backends:
+    - 'local': Local file system storage
+    - 's3': AWS S3 or S3-compatible storage (currently uses mock)
+    - 'minio': MinIO storage (currently uses mock)
+    - 'hopsworks': Hopsworks artifact registry
+    """
 
-    # Storage backend type: 's3', 'minio', or 'local'
+    # Storage backend type: 'local', 's3', 'minio', or 'hopsworks'
     backend: str = os.getenv("STORAGE_BACKEND", "local")
 
     # S3/MinIO bucket for cached images

@@ -272,9 +272,9 @@ class TestCacheStorageConsistency:
         url, meta = cache.set(
             city=city,
             timestamp=timestamp,
-            vibe_vector=vibe_vector,
             image_data=image_data,
             hitboxes=hitboxes,
+            vibe_vector=vibe_vector,
             source_articles=articles,
         )
 
@@ -300,9 +300,9 @@ class TestCacheStorageConsistency:
         url, meta = cache.set(
             city=city,
             timestamp=timestamp,
-            vibe_vector=vibe_vector,
             image_data=image_data,
             hitboxes=hitboxes,
+            vibe_vector=vibe_vector,
         )
 
         # Retrieve

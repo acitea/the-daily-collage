@@ -377,6 +377,7 @@ class HopsworksService:
         vibe_hash: str,
         image_data: bytes,
         metadata: Dict,
+        artifact_collection: str = "vibe_images",
     ):
         """
         Store a generated visualization in Hopsworks artifact registry.
@@ -385,25 +386,40 @@ class HopsworksService:
             vibe_hash: Unique hash for this visualization
             image_data: PNG image bytes
             metadata: Metadata dict (hitboxes, vibe_vector, etc.)
+            artifact_collection: Name of artifact collection to store in
         """
         if not self._project:
             self.connect()
             
         try:
-            # Store in project's artifact registry using dataset API
-            dataset_api = self._project.get_dataset_api()
-            
-            # Upload image
-            image_path = f"Resources/vibe_images/{vibe_hash}.png"
-            dataset_api.upload(image_data, image_path, overwrite=True)
-            
-            # Upload metadata as JSON
+            import io
             import json
-            metadata_json = json.dumps(metadata, indent=2)
-            metadata_path = f"Resources/vibe_images/{vibe_hash}_metadata.json"
-            dataset_api.upload(metadata_json.encode(), metadata_path, overwrite=True)
             
-            logger.info(f"Stored visualization {vibe_hash} in Hopsworks")
+            # Get artifacts API
+            artifacts_api = self._project.get_artifacts_api()
+            
+            # Upload image as artifact
+            image_file = io.BytesIO(image_data)
+            image_file.name = f"{vibe_hash}.png"
+            artifacts_api.upload(
+                artifact=image_file,
+                name=f"{vibe_hash}.png",
+                collection=artifact_collection,
+                description=f"Vibe visualization for {vibe_hash}",
+            )
+            
+            # Upload metadata as JSON artifact
+            metadata_json = json.dumps(metadata, indent=2)
+            metadata_file = io.BytesIO(metadata_json.encode())
+            metadata_file.name = f"{vibe_hash}_metadata.json"
+            artifacts_api.upload(
+                artifact=metadata_file,
+                name=f"{vibe_hash}_metadata.json",
+                collection=artifact_collection,
+                description=f"Metadata for vibe visualization {vibe_hash}",
+            )
+            
+            logger.info(f"Stored visualization {vibe_hash} in Hopsworks artifacts")
             
         except Exception as e:
             logger.error(f"Failed to store visualization: {e}")
@@ -412,12 +428,14 @@ class HopsworksService:
     def get_visualization(
         self,
         vibe_hash: str,
+        artifact_collection: str = "vibe_images",
     ) -> Optional[Tuple[bytes, Dict]]:
         """
         Retrieve a visualization from Hopsworks artifact registry.
         
         Args:
             vibe_hash: Unique hash for the visualization
+            artifact_collection: Name of artifact collection to retrieve from
             
         Returns:
             Tuple of (image_bytes, metadata_dict) or None if not found
@@ -426,18 +444,33 @@ class HopsworksService:
             self.connect()
             
         try:
-            dataset_api = self._project.get_dataset_api()
-            
-            # Download image
-            image_path = f"Resources/vibe_images/{vibe_hash}.png"
-            image_data = dataset_api.download(image_path)
-            
-            # Download metadata
-            metadata_path = f"Resources/vibe_images/{vibe_hash}_metadata.json"
-            metadata_json = dataset_api.download(metadata_path)
-            
             import json
-            metadata = json.loads(metadata_json)
+            
+            # Get artifacts API
+            artifacts_api = self._project.get_artifacts_api()
+            
+            # Download image artifact
+            image_path = artifacts_api.download(
+                name=f"{vibe_hash}.png",
+                collection=artifact_collection,
+            )
+            
+            # Download metadata artifact
+            metadata_path = artifacts_api.download(
+                name=f"{vibe_hash}_metadata.json",
+                collection=artifact_collection,
+            )
+            
+            if not image_path or not metadata_path:
+                return None
+            
+            # Read image data
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+            
+            # Read metadata
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
             
             return image_data, metadata
             
@@ -445,12 +478,13 @@ class HopsworksService:
             logger.debug(f"Visualization {vibe_hash} not found in Hopsworks: {e}")
             return None
     
-    def visualization_exists(self, vibe_hash: str) -> bool:
+    def visualization_exists(self, vibe_hash: str, artifact_collection: str = "vibe_images") -> bool:
         """
-        Check if a visualization exists in Hopsworks.
+        Check if a visualization exists in Hopsworks artifact registry.
         
         Args:
             vibe_hash: Unique hash for the visualization
+            artifact_collection: Name of artifact collection to check in
             
         Returns:
             True if exists, False otherwise
@@ -459,12 +493,17 @@ class HopsworksService:
             self.connect()
             
         try:
-            dataset_api = self._project.get_dataset_api()
-            image_path = f"Resources/vibe_images/{vibe_hash}.png"
+            # Get artifacts API
+            artifacts_api = self._project.get_artifacts_api()
             
-            # Try to get file info
-            dataset_api.get(image_path)
-            return True
+            # List artifacts and check if our artifact exists
+            artifacts = artifacts_api.list(collection=artifact_collection)
+            
+            for artifact in artifacts:
+                if artifact.name == f"{vibe_hash}.png":
+                    return True
+            
+            return False
             
         except Exception:
             return False

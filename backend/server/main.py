@@ -44,6 +44,7 @@ app = FastAPI(
 # Import modules
 try:
     from backend.visualization.composition import VisualizationService
+    from backend.server.services.hopsworks import create_hopsworks_service
     from backend.settings import settings
 except ImportError as e:
     logger.error(f"Import error: {e}")
@@ -100,7 +101,18 @@ def init_visualization_service():
     """Initialize visualization service on startup."""
     global viz_service
     try:
-        viz_service = VisualizationService()
+        # Initialize HopsworksService if using hopsworks backend
+        hopsworks_service = None
+        if settings.storage.backend == "hopsworks":
+            logger.info("Initializing HopsworksService for storage backend")
+            hopsworks_service = create_hopsworks_service(
+                enabled=settings.hopsworks.enabled,
+                api_key=settings.hopsworks.api_key,
+                project_name=settings.hopsworks.project_name,
+                host=settings.hopsworks.host,
+            )
+        
+        viz_service = VisualizationService(hopsworks_service=hopsworks_service)
         logger.info("Visualization service initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize visualization service: {str(e)}")
@@ -260,11 +272,11 @@ async def check_cache_status(
         vector = json.loads(vibe_vector)
         timestamp = datetime.utcnow()
 
-        cached = viz_service.cache.exists(city, timestamp, vector)
+        cached = viz_service.cache.exists(city, timestamp)
 
         from backend.visualization.caching import VibeHash
 
-        vibe_hash = VibeHash.generate(city, timestamp, vector)
+        vibe_hash = VibeHash.generate(city, timestamp)
 
         return CacheStatusResponse(
             vibe_hash=vibe_hash,
