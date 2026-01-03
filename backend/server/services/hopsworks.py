@@ -372,6 +372,62 @@ class HopsworksService:
             logger.error(f"Failed to retrieve vibe vector: {e}")
             return None
     
+    def get_vibe_vector_at_time(
+        self,
+        city: str,
+        timestamp: datetime,
+        fg_name: str = "vibe_vectors",
+        version: int = 1,
+    ) -> Optional[Dict[str, Tuple[float, str, int]]]:
+        """
+        Retrieve the vibe vector for a city at a specific timestamp.
+        
+        Args:
+            city: City name
+            timestamp: Specific timestamp to query
+            fg_name: Feature group name
+            version: Feature group version
+            
+        Returns:
+            Vibe vector dict or None if not found
+        """
+        if not self._fs:
+            self.connect()
+            
+        try:
+            fg = self.get_or_create_vibe_feature_group(fg_name, version)
+            
+            # Query for exact city and timestamp match
+            query = fg.select_all().filter(
+                (fg.city == city) & (fg.timestamp == timestamp)
+            )
+            df = query.read()
+            
+            if df.empty:
+                logger.warning(f"No vibe vector found for {city} at {timestamp}")
+                return None
+                
+            row = df.iloc[0]
+            
+            # Reconstruct vibe vector
+            vibe_vector = {}
+            for category in [
+                "emergencies", "crime", "festivals", "transportation",
+                "weather_temp", "weather_wet", "sports", "economics", "politics"
+            ]:
+                score = row[f"{category}_score"]
+                tag = row[f"{category}_tag"]
+                count = row.get(f"{category}_count", 0)
+                if score != 0.0 or tag != "":
+                    vibe_vector[category] = (score, tag, count)
+            
+            logger.info(f"Retrieved vibe vector for {city} at {timestamp}")
+            return vibe_vector
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve vibe vector at time: {e}")
+            return None
+    
     def store_visualization(
         self,
         vibe_hash: str,
@@ -472,129 +528,119 @@ class HopsworksService:
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
             
+            logger.info(f"Retrieved visualization from Hopsworks: {vibe_hash}")
             return image_data, metadata
             
         except Exception as e:
-            logger.debug(f"Visualization {vibe_hash} not found in Hopsworks: {e}")
+            logger.error(f"Failed to retrieve visualization: {e}")
             return None
     
-    def visualization_exists(self, vibe_hash: str, artifact_collection: str = "vibe_images") -> bool:
+    def get_headlines_for_city(
+        self,
+        city: str,
+        timestamp: datetime,
+        fg_name: str = "headline_classifications",
+        version: int = 1,
+    ) -> List[Dict]:
         """
-        Check if a visualization exists in Hopsworks artifact registry.
+        Retrieve individual headlines from the feature store for a city and time.
         
         Args:
-            vibe_hash: Unique hash for the visualization
-            artifact_collection: Name of artifact collection to check in
+            city: City name
+            timestamp: Time window timestamp
+            fg_name: Feature group name
+            version: Feature group version
             
         Returns:
-            True if exists, False otherwise
+            List of article dicts with title, url, source, and category scores/tags
         """
-        if not self._project:
+        if not self._fs:
             self.connect()
-            
+        
         try:
-            # Get artifacts API
-            artifacts_api = self._project.get_artifacts_api()
+            fg = self.get_or_create_headline_feature_group(fg_name, version)
             
-            # List artifacts and check if our artifact exists
-            artifacts = artifacts_api.list(collection=artifact_collection)
+            # Query for city and timestamp
+            query = fg.select_all().filter(
+                (fg.city == city) & (fg.timestamp == timestamp)
+            )
             
-            for artifact in artifacts:
-                if artifact.name == f"{vibe_hash}.png":
-                    return True
+            df = query.read()
             
-            return False
+            if df.empty:
+                logger.warning(f"No headlines found for {city} at {timestamp}")
+                return []
             
-        except Exception:
-            return False
-
-
-class MockHopsworksService:
-    """
-    Mock Hopsworks service for development/testing without Hopsworks credentials.
-    """
-    
-    def __init__(self, **kwargs):
-        """Initialize mock service (accepts any args for compatibility)."""
-        self.storage: Dict[str, Tuple[bytes, Dict]] = {}
-        self.vibes: Dict[str, Dict] = {}
-        self.headlines: Dict[str, List[Dict]] = {}
-        logger.info("Using MockHopsworksService")
-    
-    def connect(self):
-        """Mock connect."""
-        logger.info("Mock: Connected to Hopsworks")
-        
-    def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
-        """Mock headline feature group getter."""
-        logger.info(f"Mock: Using headline feature group {fg_name} v{version}")
-        return None
-        
-    def get_or_create_vibe_feature_group(self, fg_name: str = "vibe_vectors", version: int = 1):
-        """Mock vibe feature group getter."""
-        logger.info(f"Mock: Using vibe feature group {fg_name} v{version}")
-        return None
-        
-    def store_headline_classifications(self, headlines: List[Dict], city: str, timestamp: datetime, **kwargs):
-        """Mock headline storage."""
-        key = f"{city}_{timestamp.isoformat()}"
-        self.headlines[key] = headlines
-        logger.info(f"Mock: Stored {len(headlines)} headline classifications for {city}")
-        
-    def store_vibe_vector(self, city: str, timestamp: datetime, vibe_vector: Dict, **kwargs):
-        """Mock vibe vector storage."""
-        key = f"{city}_{timestamp.isoformat()}"
-        self.vibes[key] = vibe_vector
-        logger.info(f"Mock: Stored vibe vector for {city}")
-        
-    def get_latest_vibe_vector(self, city: str, **kwargs) -> Optional[Dict]:
-        """Mock vibe vector retrieval."""
-        # Return most recent for city
-        matching = [k for k in self.vibes.keys() if k.startswith(city)]
-        if not matching:
-            return None
-        latest_key = sorted(matching)[-1]
-        return self.vibes[latest_key]
-        
-    def store_visualization(self, vibe_hash: str, image_data: bytes, metadata: Dict):
-        """Mock visualization storage."""
-        self.storage[vibe_hash] = (image_data, metadata)
-        logger.info(f"Mock: Stored visualization {vibe_hash}")
-        
-    def get_visualization(self, vibe_hash: str) -> Optional[Tuple[bytes, Dict]]:
-        """Mock visualization retrieval."""
-        return self.storage.get(vibe_hash)
-        
-    def visualization_exists(self, vibe_hash: str) -> bool:
-        """Mock visualization existence check."""
-        return vibe_hash in self.storage
+            # Convert to list of dicts with structured classifications
+            headlines = []
+            categories = [
+                "emergencies", "crime", "festivals", "transportation",
+                "weather_temp", "weather_wet", "sports", "economics", "politics"
+            ]
+            
+            for _, row in df.iterrows():
+                headline = {
+                    "article_id": row["article_id"],
+                    "title": row["title"],
+                    "url": row["url"],
+                    "source": row["source"],
+                    "classifications": {}
+                }
+                
+                # Add category scores and tags
+                for category in categories:
+                    score = row.get(f"{category}_score", 0.0)
+                    tag = row.get(f"{category}_tag", "")
+                    if score != 0.0 or tag:  # Only include if there's data
+                        headline["classifications"][category] = {
+                            "score": score,
+                            "tag": tag
+                        }
+                
+                headlines.append(headline)
+            
+            logger.info(f"Retrieved {len(headlines)} headlines for {city} at {timestamp}")
+            return headlines
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve headlines: {e}")
+            return []
 
 
 def create_hopsworks_service(
     enabled: bool = True,
     api_key: Optional[str] = None,
-    project_name: str = "daily_collage",
+    project_name: Optional[str] = None,
     host: Optional[str] = None,
-) -> HopsworksService:
+) -> Optional[HopsworksService]:
     """
-    Factory function to create appropriate Hopsworks service.
+    Factory function to create HopsworksService.
     
     Args:
-        enabled: If False, use mock service
+        enabled: Whether Hopsworks integration is enabled
         api_key: Hopsworks API key
         project_name: Project name
         host: Hopsworks host
         
     Returns:
-        HopsworksService or MockHopsworksService
+        HopsworksService instance or None if disabled/missing credentials
     """
-    if not enabled or not api_key:
-        logger.info("Using MockHopsworksService")
-        return MockHopsworksService()
-        
-    logger.info("Using real HopsworksService")
-    return HopsworksService(
-        api_key=api_key,
-        project_name=project_name,
-        host=host,
-    )
+    if not enabled:
+        logger.info("Hopsworks integration disabled")
+        return None
+    
+    if not api_key or not project_name:
+        logger.warning("Hopsworks API key or project name not configured")
+        return None
+    
+    try:
+        service = HopsworksService(
+            api_key=api_key,
+            project_name=project_name,
+            host=host,
+        )
+        logger.info(f"HopsworksService created for project: {project_name}")
+        return service
+    except Exception as e:
+        logger.error(f"Failed to create HopsworksService: {e}")
+        raise

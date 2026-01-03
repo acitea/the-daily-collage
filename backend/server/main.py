@@ -7,13 +7,12 @@ underlying news articles.
 
 import logging
 import sys
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse, Response, FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Ensure project root is on the Python path for absolute imports
@@ -45,6 +44,7 @@ app = FastAPI(
 try:
     from backend.visualization.composition import VisualizationService
     from backend.server.services.hopsworks import create_hopsworks_service
+    from backend.server.services.backfill import trigger_backfill_ingestion
     from backend.settings import settings
 except ImportError as e:
     logger.error(f"Import error: {e}")
@@ -93,29 +93,44 @@ class CacheStatusResponse(BaseModel):
     timestamp: str
 
 
-# Global visualization service
+# Global services
 viz_service = None
+hopsworks_service = None
+active_backfills: Set[str] = set()  # Track cities currently being backfilled
 
 
 def init_visualization_service():
     """Initialize visualization service on startup."""
-    global viz_service
-    try:
-        # Initialize HopsworksService if using hopsworks backend
-        hopsworks_service = None
-        if settings.storage.backend == "hopsworks":
-            logger.info("Initializing HopsworksService for storage backend")
+    global viz_service, hopsworks_service
+    
+    # Initialize HopsworksService if enabled (graceful degradation)
+    if settings.hopsworks.enabled:
+        try:
+            logger.info("Initializing HopsworksService")
             hopsworks_service = create_hopsworks_service(
                 enabled=settings.hopsworks.enabled,
                 api_key=settings.hopsworks.api_key,
                 project_name=settings.hopsworks.project_name,
                 host=settings.hopsworks.host,
             )
-        
+            logger.info("HopsworksService initialized successfully")
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize HopsworksService: {str(e)}. "
+                "Endpoints requiring Hopsworks will return 503."
+            )
+            hopsworks_service = None
+    else:
+        logger.info("HopsworksService disabled in settings")
+        hopsworks_service = None
+    
+    # Initialize VisualizationService
+    try:
         viz_service = VisualizationService(hopsworks_service=hopsworks_service)
         logger.info("Visualization service initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize visualization service: {str(e)}")
+        viz_service = None
 
 
 @app.on_event("startup")
@@ -151,7 +166,10 @@ async def health_check():
 
 
 @app.post("/api/visualization", tags=["Visualization"], response_model=VisualizationResponse)
-async def create_visualization(request: VibeVectorRequest):
+async def create_visualization(
+    request: VibeVectorRequest,
+    regenerate: bool = Query(False, description="Skip cache and force regeneration"),
+):
     """
     Generate visualization from explicit vibe vector.
 
@@ -159,6 +177,7 @@ async def create_visualization(request: VibeVectorRequest):
 
     Args:
         request: VibeVectorRequest with city, vibe_vector, optional timestamp
+        regenerate: Force regeneration (ignores cache)
 
     Returns:
         VisualizationResponse with image URL and hitboxes
@@ -185,6 +204,7 @@ async def create_visualization(request: VibeVectorRequest):
             vibe_vector=request.vibe_vector,
             timestamp=timestamp,
             source_articles=request.source_articles,
+            force_regenerate=regenerate,
         )
 
         # Build response with hitbox objects
@@ -207,13 +227,269 @@ async def create_visualization(request: VibeVectorRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/vibe/{cache_key}", tags=["Vibe"], response_model=VisualizationResponse)
+async def get_vibe(
+    cache_key: str,
+    background_tasks: BackgroundTasks,
+    regenerate: bool = Query(False, description="Force regenerate from data"),
+):
+    """
+    Get vibe visualization for any location/date/time using cache_key.
+    
+    This is the PRIMARY endpoint for the frontend. The cache_key encodes city/date/time.
+    It orchestrates the full data flow:
+    1. Try to get from cache using cache_key
+    2. If not in cache -> Parse cache_key to get city/timestamp
+    3. Query Hopsworks for vibe vector at that timestamp
+    4. If None -> Trigger backfill in background, return 503 with Retry-After header
+    5. If found -> Fetch headlines, generate visualization, return comprehensive response
+    
+    Cache key format: {city}_{YYYY-MM-DD}_{HH-HH}
+    Example: stockholm_2026-01-03_12-18 (Stockholm, Jan 3 2026, 12pm-6pm window)
+    
+    Args:
+        cache_key: Cache key encoding location/date/time (e.g., "stockholm_2026-01-03_12-18")
+        background_tasks: FastAPI background tasks for async backfill
+        regenerate: Force regeneration (ignores cache)
+    
+    Returns:
+        VisualizationResponse with image URL, hitboxes, vibe scores, and cache_key
+        
+    Raises:
+        400: Invalid cache_key format
+        503: Hopsworks service unavailable or data being backfilled (with Retry-After header)
+        404: City not supported
+        500: Internal server error
+    """
+    if not viz_service:
+        raise HTTPException(
+            status_code=503, detail="Visualization service not initialized"
+        )
+    
+    if not hopsworks_service:
+        raise HTTPException(
+            status_code=503,
+            detail="Hopsworks service not available. Cannot retrieve vibe data.",
+        )
+    
+    try:
+        # Import VibeHash for parsing cache_key
+        from backend.storage.core import VibeHash
+        
+        # Parse cache_key to extract city and timestamp
+        cache_info = VibeHash.extract_info(cache_key)
+        if not cache_info:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid cache_key format: {cache_key}. Expected format: city_YYYY-MM-DD_HH-HH",
+            )
+        
+        city = cache_info["city"].title()  # Normalize to title case
+        date = cache_info["date"]
+        window = cache_info["window"]
+        
+        # Reconstruct timestamp from window (use start of window)
+        window_start_hour = int(window.split("-")[0])
+        timestamp = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+        
+        logger.info(f"Parsed cache_key: city={city}, timestamp={timestamp}, window={window}")
+        
+        # Check if we already have this in cache (unless regenerating)
+        if not regenerate:
+            storage = viz_service.cache.storage
+            metadata = storage.get_metadata(cache_key)
+            image_data = storage.get_image(cache_key)
+            
+            if metadata and image_data:
+                logger.info(f"Cache hit for {cache_key}")
+                hitboxes = [HitboxData(**hb) for hb in metadata.hitboxes]
+                
+                return VisualizationResponse(
+                    city=city,
+                    cache_key=cache_key,
+                    image_url=metadata.image_url,
+                    hitboxes=hitboxes,
+                    vibe_vector=metadata.vibe_vector,
+                    cached=True,
+                    generated_at=datetime.utcnow().isoformat(),
+                )
+        
+        # Not in cache or regenerating - query Hopsworks for vibe data at this timestamp
+        logger.info(f"Querying Hopsworks for vibe vector: {city} at {timestamp}")
+        vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
+        
+        if vibe_data is None:
+            # No data available - trigger backfill
+            logger.warning(f"No vibe data for {city} at {timestamp}, triggering backfill")
+            
+            # Map city to country code (hardcoded for supported cities)
+            country_map = {
+                "stockholm": "sweden",
+                "sweden": "sweden",
+                "gothenburg": "sweden",
+                "malmo": "sweden",
+                "malmö": "sweden",
+            }
+            country = country_map.get(city.lower())
+            
+            if not country:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"City '{city}' not supported. Supported cities: {list(country_map.keys())}",
+                )
+            
+            # Check if already backfilling (use cache_key for tracking)
+            if cache_key in active_backfills:
+                logger.info(f"Backfill already in progress for {cache_key}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Data backfill in progress for {cache_key}. Please retry in 5 minutes.",
+                    headers={"Retry-After": "300"},
+                )
+            
+            # Mark as active and queue backfill task
+            active_backfills.add(cache_key)
+            logger.info(f"Added {cache_key} to active backfills")
+            
+            background_tasks.add_task(
+                trigger_backfill_ingestion,
+                city=city,
+                country=country,
+                hopsworks_service=hopsworks_service,
+                active_backfills=active_backfills,
+                max_articles=250,
+            )
+            
+            # Return 503 with Retry-After header
+            raise HTTPException(
+                status_code=503,
+                detail=f"No data available for {cache_key}. Backfill triggered. Please retry in 5 minutes.",
+                headers={"Retry-After": "300"},
+            )
+        
+        # Convert Hopsworks vibe data format to API format
+        # Hopsworks format: {"emergencies": (0.8, "fire", 5), ...}
+        # API format: {"emergencies": 0.8, ...}
+        vibe_vector = {
+            category: score
+            for category, (score, tag, count) in vibe_data.items()
+        }
+        
+        logger.info(f"Retrieved vibe vector for {city} at {timestamp}: {len(vibe_vector)} categories")
+        
+        # Get source articles from Hopsworks (optional, may be empty)
+        source_articles = []
+        
+        try:
+            # Attempt to get headlines, but don't fail if unavailable
+            source_articles = hopsworks_service.get_headlines_for_city(
+                city=city,
+                timestamp=timestamp,
+            )
+            logger.info(f"Retrieved {len(source_articles)} source articles")
+        except Exception as e:
+            logger.warning(f"Could not retrieve source articles: {e}")
+        
+        # Generate or get visualization from cache
+        image_data, metadata = viz_service.generate_or_get(
+            city=city,
+            vibe_vector=vibe_vector,
+            timestamp=timestamp,
+            source_articles=source_articles,
+            force_regenerate=regenerate,
+        )
+        
+        # Build response with hitbox objects
+        hitboxes = [HitboxData(**hb) for hb in metadata.get("hitboxes", [])]
+        
+        return VisualizationResponse(
+            city=city,
+            cache_key=metadata["cache_key"],
+            image_url=metadata["image_url"],
+            hitboxes=hitboxes,
+            vibe_vector=vibe_vector,
+            cached=metadata["cached"],
+            generated_at=datetime.utcnow().isoformat(),
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting vibe for {cache_key}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cache-key/{city}", tags=["Utility"])
+async def generate_cache_key(
+    city: str,
+    timestamp: Optional[str] = Query(None, description="ISO format timestamp (defaults to current time)"),
+):
+    """
+    Generate a cache_key for a given city and timestamp.
+    
+    This is a utility endpoint to help frontends construct valid cache_keys.
+    
+    Args:
+        city: City name (e.g., "stockholm")
+        timestamp: Optional ISO format timestamp (defaults to current time)
+        
+    Returns:
+        Dictionary with cache_key and parsed info
+        
+    Example:
+        GET /api/cache-key/stockholm?timestamp=2026-01-03T15:30:00
+        Returns: {"cache_key": "stockholm_2026-01-03_12-18", "city": "stockholm", ...}
+    """
+    try:
+        from backend.storage.core import VibeHash
+        
+        # Parse timestamp or use current
+        if timestamp:
+            try:
+                ts = datetime.fromisoformat(timestamp)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid timestamp format: {timestamp}. Use ISO format (YYYY-MM-DDTHH:MM:SS)",
+                )
+        else:
+            ts = datetime.utcnow()
+        
+        # Generate cache_key
+        cache_key = VibeHash.generate(city=city, timestamp=ts)
+        
+        # Parse it back for validation
+        info = VibeHash.extract_info(cache_key)
+        
+        return JSONResponse(content={
+            "cache_key": cache_key,
+            "city": info["city"],
+            "date": info["date"].strftime("%Y-%m-%d"),
+            "window": info["window"],
+            "timestamp": ts.isoformat(),
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating cache key: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/visualization/{cache_key}/image", tags=["Visualization"])
-async def get_visualization_image(cache_key: str):
+async def get_visualization_image(
+    cache_key: str,
+    regenerate: bool = Query(False, description="Force regeneration if not in cache"),
+):
     """
     Get the actual image for a cached visualization.
+    
+    If the image is not found and regenerate=True, attempts to regenerate
+    from metadata stored with the cache_key.
 
     Args:
-        cache_key: Key from previous /api/visualization request
+        cache_key: Key from previous /api/visualization or /api/vibe request
+        regenerate: If True and image not found, attempt regeneration
 
     Returns:
         PNG image data
@@ -228,12 +504,38 @@ async def get_visualization_image(cache_key: str):
         storage = viz_service.cache.storage
         image_data = storage.get_image(cache_key)
 
-        if not image_data:
+        if image_data:
+            return Response(content=image_data, media_type="image/png")
+        
+        # Image not found
+        if not regenerate:
             raise HTTPException(
                 status_code=404,
-                detail=f"Image not found for cache key: {cache_key}",
+                detail=f"Image not found for cache key: {cache_key}. Use ?regenerate=true to generate.",
             )
-
+        
+        # Attempt on-demand regeneration
+        logger.info(f"Image not found for {cache_key}, attempting regeneration")
+        
+        # Get metadata to reconstruct generation parameters
+        metadata = storage.get_metadata(cache_key)
+        
+        if not metadata:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Metadata not found for cache key: {cache_key}. Cannot regenerate.",
+            )
+        
+        # Regenerate visualization using stored metadata
+        image_data, new_metadata = viz_service.generate_or_get(
+            city=metadata.city,
+            vibe_vector=metadata.vibe_vector,
+            timestamp=metadata.timestamp,
+            source_articles=metadata.source_articles,
+            force_regenerate=True,
+        )
+        
+        logger.info(f"Successfully regenerated image for {cache_key}")
         return Response(content=image_data, media_type="image/png")
 
     except HTTPException:

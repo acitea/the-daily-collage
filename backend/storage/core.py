@@ -73,7 +73,7 @@ class VibeHash:
             Dict with city, date, window or None if invalid
         """
         parts = vibe_hash.split("_")
-        if len(parts) < 4:
+        if len(parts) < 3:
             return None
 
         city = parts[0]
