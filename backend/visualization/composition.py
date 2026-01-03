@@ -32,25 +32,6 @@ class SignalIntensity:
     intensity: float  # 0.0-1.0 scale
 
 
-class VisualizationCache:
-    """
-    Deprecated: Use VibeCache instead.
-
-    Kept for backwards compatibility.
-    """
-
-    def __init__(self):
-        self.cache: Dict[str, bytes] = {}
-        self.metadata: Dict[str, Dict] = {}
-
-    def get_stats(self) -> Dict[str, int]:
-        """Returns cache statistics."""
-        return {
-            "cached_visualizations": len(self.cache),
-            "cache_size_estimates": sum(len(data) for data in self.cache.values()),
-        }
-
-
 class HybridComposer:
     """
     Hybrid image composition pipeline.
@@ -146,8 +127,8 @@ class HybridComposer:
         polished_data = self.poller.polish(
             layout_data,
             prompt=(
-                "A colorful sticker scrapbook collage representing news from "
-                f"{location}, playful cartoon stickers, overlapping elements, "
+                "A colorful sticker scrapbook collage, "
+                f"{location}, playful cartoon stickers, "
                 "vibrant colors, whimsical illustration style"
             ),
             negative_prompt=(
@@ -221,9 +202,6 @@ class VisualizationService:
             storage = LocalStorageBackend(settings.storage.local_storage_dir)
 
         self.cache = VibeCache(storage)
-
-        # Keep deprecated cache for backwards compatibility
-        self.deprecated_cache = VisualizationCache()
 
     def generate_or_get(
         self,

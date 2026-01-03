@@ -578,6 +578,7 @@ class ZoneLayoutComposer:
             List of hitbox dicts
         """
         return [h.to_dict() for h in self.hitboxes]
+
     def _apply_atmosphere_layers(
         self,
         image: Image.Image,

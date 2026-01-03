@@ -28,7 +28,7 @@ class StabilityAIPoller:
         self,
         api_key: str,
         api_host: str = "https://api.stability.ai",
-        engine_id: str = "stable-diffusion-v1-6-768-768",
+        engine_id: str = "stable-diffusion-xl-1024-v1-0",
         image_strength: float = 0.35,
         timeout: int = 60,
     ):
@@ -76,14 +76,11 @@ class StabilityAIPoller:
             return image_data
 
         try:
-            # Encode image as base64
-            image_b64 = base64.b64encode(image_data).decode("utf-8")
-
             # Build prompts
             if not prompt:
                 prompt = (
                     "a colorful sticker scrapbook collage, playful cartoon stickers, "
-                    "overlapping elements, vibrant colors, whimsical illustration style, "
+                    "vibrant colors, whimsical illustration style, "
                     "artistic arrangement, scrapbook aesthetic"
                 )
 
@@ -107,13 +104,12 @@ class StabilityAIPoller:
             }
 
             payload = {
-                "init_image": image_b64,
                 "image_strength": self.image_strength,
                 "text_prompts": [
                     {"text": prompt, "weight": 1.0},
                     {"text": negative_prompt, "weight": -1.0},
                 ],
-                "samples": 1,
+                "style_preset": "digital-art",
                 "steps": 30,
                 "cfg_scale": 7.0,
             }
@@ -125,8 +121,11 @@ class StabilityAIPoller:
 
             response = requests.post(
                 url,
-                json=payload,
                 headers=headers,
+                files={
+                    "init_image": image_data # image size 1344x768
+                },
+                data=payload,
                 timeout=self.timeout,
             )
 
@@ -204,7 +203,7 @@ def create_poller(
     enable_polish: bool = True,
     api_key: Optional[str] = None,
     api_host: str = "https://api.stability.ai",
-    engine_id: str = "stable-diffusion-v1-6-768-768",
+    engine_id: str = "stable-diffusion-xl-1024-v1-0",
     image_strength: float = 0.35,
     timeout: int = 60,
 ):
