@@ -25,6 +25,15 @@ from ml.ingestion.script import fetch_news
 from backend.server.services.hopsworks import create_hopsworks_service
 from backend.settings import settings
 
+# Try to import fine-tuned classifier (optional)
+try:
+    from ml.models.inference import get_fine_tuned_classifier
+    HAS_FINE_TUNED_MODEL = True
+except ImportError:
+    HAS_FINE_TUNED_MODEL = False
+
+_fine_tuned_classifier = None
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -45,15 +54,25 @@ SIGNAL_CATEGORIES = [
     "politics",
 ]
 
+# Tag vocabulary for each category (used by ML model)
+TAG_VOCAB = {
+    "emergencies": ["", "fire", "earthquake", "explosion", "evacuation", "accident"],
+    "crime": ["", "theft", "assault", "robbery", "police", "vandalism"],
+    "festivals": ["", "concert", "celebration", "parade", "crowd", "event"],
+    "transportation": ["", "traffic", "accident", "congestion", "delay", "closure"],
+    "weather_temp": ["", "hot", "cold", "heatwave", "freeze"],
+    "weather_wet": ["", "rain", "snow", "flood", "storm", "drought"],
+    "sports": ["", "football", "hockey", "victory", "championship", "game"],
+    "economics": ["", "market", "business", "trade", "employment", "inflation"],
+    "politics": ["", "election", "protest", "government", "policy", "vote"],
+}
+
 
 def classify_article(title: str, description: str = "") -> Dict[str, Tuple[float, str]]:
     """
     Classify a single article into signal categories.
     
-    This is a placeholder for ML model inference.
-    Replace with actual multi-head model that outputs:
-    - Score: -1.0 to 1.0 (regression)
-    - Tag: string (classification)
+    Uses fine-tuned BERT model if available, falls back to keyword classification.
     
     Args:
         title: Article title
@@ -63,9 +82,22 @@ def classify_article(title: str, description: str = "") -> Dict[str, Tuple[float
         Dict mapping category to (score, tag) tuple
         e.g., {"emergencies": (0.8, "fire"), "crime": (0.0, "")}
     """
-    # TODO: Replace with actual ML model inference
-    # For now, use keyword-based classification
+    # Try fine-tuned model first
+    global _fine_tuned_classifier
     
+    if HAS_FINE_TUNED_MODEL:
+        try:
+            if _fine_tuned_classifier is None:
+                _fine_tuned_classifier = get_fine_tuned_classifier()
+            
+            result = _fine_tuned_classifier.classify(title, description)
+            if result:
+                logger.debug(f"ML Classification: {result}")
+                return result
+        except Exception as e:
+            logger.warning(f"Fine-tuned model failed, using keyword fallback: {e}")
+    
+    # Fallback to keyword-based classification
     text = (title + " " + description).lower()
     signals = {}
     

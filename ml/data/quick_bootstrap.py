@@ -30,9 +30,11 @@ def quick_bootstrap(
     all_articles = []
     
     for country in countries:
-        print(f"\n📰 Fetching {articles_per_country} articles from {country}...")
+        # GDELT API has a 250 article limit per request
+        articles_to_fetch = min(articles_per_country, 250)
+        print(f"\n📰 Fetching {articles_to_fetch} articles from {country}...")
         try:
-            df = fetch_news(country=country, max_articles=articles_per_country)
+            df = fetch_news(country=country, max_articles=articles_to_fetch)
         except Exception as e:
             print(f"⚠️  Error fetching {country}: {e}")
             continue
@@ -75,7 +77,19 @@ def quick_bootstrap(
     print(f"\n✓ Total articles: {len(all_articles)}")
 
     # Create DataFrame
+    if not all_articles:
+        print(f"\n❌ No articles were collected. Check GDELT API and network connectivity.")
+        # Create empty parquet files
+        empty_df = pl.DataFrame({"title": [], "description": []})
+        empty_df.write_parquet(output_path / "train_bootstrap.parquet")
+        empty_df.write_parquet(output_path / "val_bootstrap.parquet")
+        return output_path / "train_bootstrap.parquet", output_path / "val_bootstrap.parquet"
+
     df_all = pl.DataFrame(all_articles)
+
+    if df_all.is_empty():
+        print(f"\n❌ No articles were collected. Check GDELT API and network connectivity.")
+        return output_path / "train_bootstrap.parquet", output_path / "val_bootstrap.parquet"
 
     # Shuffle
     df_all = df_all.sample(fraction=1.0, shuffle=True)
@@ -99,11 +113,14 @@ def quick_bootstrap(
     print(f"\n✓ Saved validation data: {val_path}")
 
     # Print sample statistics
-    print("\n📊 Signal distribution:")
-    for cat in SIGNAL_CATEGORIES:
-        non_zero = df_all.filter(pl.col(f"{cat}_score") != 0.0).height
-        pct = (non_zero / len(df_all)) * 100
-        print(f"  {cat:20s}: {non_zero:4d} articles ({pct:5.1f}%)")
+    if len(df_all) > 0:
+        print("\n📊 Signal distribution:")
+        for cat in SIGNAL_CATEGORIES:
+            non_zero = df_all.filter(pl.col(f"{cat}_score") != 0.0).height
+            pct = (non_zero / len(df_all)) * 100
+            print(f"  {cat:20s}: {non_zero:4d} articles ({pct:5.1f}%)")
+    else:
+        print("\n⚠️  No data to show distribution")
 
     return train_path, val_path
 
@@ -112,14 +129,14 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--countries", nargs="+", default=["sweden"], help="Countries to fetch")
-    parser.add_argument("--articles-per-country", type=int, default=500)
+    parser.add_argument("--articles-per-country", type=int, default=250, help="Articles to fetch (max 250 per GDELT API limit)")
     parser.add_argument("--output-dir", default="ml/data")
 
     args = parser.parse_args()
 
+    # Always use Sweden only
     train_path, val_path = quick_bootstrap(
-        countries=args.countries,
+        countries=["sweden"],
         articles_per_country=args.articles_per_country,
         output_dir=args.output_dir,
     )
