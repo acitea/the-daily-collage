@@ -51,44 +51,44 @@ class LocalStorageBackend(StorageBackend):
         except Exception as e:
             logger.error(f"Failed to save metadata store: {e}")
 
-    def get_image(self, vibe_hash: str) -> Optional[bytes]:
+    def get_image(self, cache_key: str) -> Optional[bytes]:
         """Retrieve image from local storage."""
-        image_path = self.images_dir / f"{vibe_hash}.png"
+        image_path = self.images_dir / f"{cache_key}.png"
         if image_path.exists():
             try:
                 with open(image_path, "rb") as f:
                     return f.read()
             except Exception as e:
-                logger.error(f"Failed to read image {vibe_hash}: {e}")
+                logger.error(f"Failed to read image {cache_key}: {e}")
         return None
 
-    def put_image(self, vibe_hash: str, image_data: bytes) -> str:
+    def put_image(self, cache_key: str, image_data: bytes) -> str:
         """Store image and return URL."""
-        image_path = self.images_dir / f"{vibe_hash}.png"
+        image_path = self.images_dir / f"{cache_key}.png"
         try:
             with open(image_path, "wb") as f:
                 f.write(image_data)
             logger.info(f"Stored image: {image_path}")
-            return f"/api/cache/images/{vibe_hash}.png"
+            return f"/api/cache/images/{cache_key}.png"
         except Exception as e:
-            logger.error(f"Failed to write image {vibe_hash}: {e}")
+            logger.error(f"Failed to write image {cache_key}: {e}")
             return ""
 
-    def get_metadata(self, vibe_hash: str) -> Optional[CacheMetadata]:
+    def get_metadata(self, cache_key: str) -> Optional[CacheMetadata]:
         """Retrieve metadata."""
-        if vibe_hash in self.metadata_store:
+        if cache_key in self.metadata_store:
             try:
-                return CacheMetadata.from_dict(self.metadata_store[vibe_hash])
+                return CacheMetadata.from_dict(self.metadata_store[cache_key])
             except Exception as e:
-                logger.error(f"Failed to parse metadata {vibe_hash}: {e}")
+                logger.error(f"Failed to parse metadata {cache_key}: {e}")
         return None
 
     def put_metadata(self, metadata: CacheMetadata) -> None:
         """Store metadata."""
-        self.metadata_store[metadata.vibe_hash] = metadata.to_dict()
+        self.metadata_store[metadata.cache_key] = metadata.to_dict()
         self._save_metadata_store()
-        logger.info(f"Stored metadata: {metadata.vibe_hash}")
+        logger.info(f"Stored metadata: {metadata.cache_key}")
 
-    def exists(self, vibe_hash: str) -> bool:
+    def exists(self, cache_key: str) -> bool:
         """Check if cached."""
-        return (self.images_dir / f"{vibe_hash}.png").exists()
+        return (self.images_dir / f"{cache_key}.png").exists()

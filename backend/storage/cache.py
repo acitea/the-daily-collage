@@ -36,19 +36,19 @@ class VibeCache:
         Returns:
             Tuple of (image_bytes, metadata) or (None, None) if not cached
         """
-        vibe_hash = VibeHash.generate(city, timestamp)
+        cache_key = VibeHash.generate(city, timestamp)
 
-        image_data = self.storage.get_image(vibe_hash)
-        metadata = self.storage.get_metadata(vibe_hash)
+        image_data = self.storage.get_image(cache_key)
+        metadata = self.storage.get_metadata(cache_key)
 
         if image_data and metadata:
-            logger.info(f"Cache hit: {vibe_hash}")
+            logger.info(f"Cache hit: {cache_key}")
             return image_data, metadata
         elif image_data or metadata:
-            logger.warning(f"Partial cache hit for {vibe_hash}")
+            logger.warning(f"Partial cache hit for {cache_key}")
             return image_data, metadata
         else:
-            logger.info(f"Cache miss: {vibe_hash}")
+            logger.info(f"Cache miss: {cache_key}")
             return None, None
 
     def set(
@@ -57,8 +57,6 @@ class VibeCache:
         timestamp: datetime,
         image_data: bytes,
         hitboxes: List[Dict],
-        vibe_vector: Dict[str, float],
-        source_articles: List[Dict] = None,
     ) -> Tuple[str, CacheMetadata]:
         """
         Cache image and metadata.
@@ -68,31 +66,26 @@ class VibeCache:
             timestamp: Time window
             image_data: PNG image bytes
             hitboxes: List of hitbox dicts
-            vibe_vector: Signal scores (stored in metadata only)
-            source_articles: Optional articles that contributed
+            vibe_vector: (Deprecated) No longer stored - retrieve from feature store
+            source_articles: (Deprecated) No longer stored - retrieve from feature store
 
         Returns:
-            Tuple of (image_url, metadata)
+            Tuple of (cache_key, metadata)
         """
-        vibe_hash = VibeHash.generate(city, timestamp)
+        cache_key = VibeHash.generate(city, timestamp)
 
         # Store image
-        image_url = self.storage.put_image(vibe_hash, image_data)
+        image_url = self.storage.put_image(cache_key, image_data)
 
-        # Create and store metadata
+        # Create and store metadata (only hitboxes)
         metadata = CacheMetadata(
-            vibe_hash=vibe_hash,
-            city=city,
-            timestamp=timestamp,
-            vibe_vector=vibe_vector,
-            image_url=image_url,
+            cache_key=cache_key,
             hitboxes=hitboxes,
-            source_articles=source_articles,
         )
         self.storage.put_metadata(metadata)
 
-        logger.info(f"Cached: {vibe_hash}")
-        return image_url, metadata
+        logger.info(f"Cached: {cache_key}")
+        return cache_key, metadata
 
     def exists(
         self,
@@ -100,5 +93,5 @@ class VibeCache:
         timestamp: datetime,
     ) -> bool:
         """Check if vibe is cached."""
-        vibe_hash = VibeHash.generate(city, timestamp)
-        return self.storage.exists(vibe_hash)
+        cache_key = VibeHash.generate(city, timestamp)
+        return self.storage.exists(cache_key)

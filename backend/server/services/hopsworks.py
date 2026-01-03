@@ -13,8 +13,6 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import io
 
-from PIL import Image
-
 logger = logging.getLogger(__name__)
 
 

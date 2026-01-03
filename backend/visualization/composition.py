@@ -243,32 +243,28 @@ class VisualizationService:
                 logger.info(f"Cache hit for {city}")
                 return image_data, {
                     "cached": True,
-                    "cache_key": metadata.vibe_hash,
-                    "image_url": metadata.image_url,
+                    "cache_key": metadata.cache_key,
                     "hitboxes": metadata.hitboxes,
-                    "vibe_vector": metadata.vibe_vector,
                 }
 
         # Cache miss or force regenerate
         logger.info(f"Generating visualization for {city}")
         image_data, hitboxes = self.composer.compose(vibe_vector, city)
 
-        # Cache result
-        image_url, metadata = self.cache.set(
+        # Cache result (only hitboxes are stored in metadata now)
+        cache_key, metadata = self.cache.set(
             city=city,
             timestamp=timestamp,
             image_data=image_data,
             hitboxes=hitboxes,
-            vibe_vector=vibe_vector,
-            source_articles=source_articles or [],
+            vibe_vector=vibe_vector,  # Not stored but kept for API compatibility
+            source_articles=source_articles or [],  # Not stored but kept for API compatibility
         )
 
         return image_data, {
             "cached": False,
-            "cache_key": metadata.vibe_hash,
-            "image_url": image_url,
+            "cache_key": cache_key,
             "hitboxes": hitboxes,
-            "vibe_vector": vibe_vector,
         }
 
     @property

@@ -62,17 +62,17 @@ class VibeHash:
         return cache_key
 
     @classmethod
-    def extract_info(cls, vibe_hash: str) -> Optional[Dict]:
+    def extract_info(cls, cache_key: str) -> Optional[Dict]:
         """
-        Parse information from a vibe hash.
+        Parse information from a cache_key.
 
         Args:
-            vibe_hash: Hash string
+            cache_key: Cache key string (format: city_YYYY-MM-DD_HH-HH)
 
         Returns:
             Dict with city, date, window or None if invalid
         """
-        parts = vibe_hash.split("_")
+        parts = cache_key.split("_")
         if len(parts) < 3:
             return None
 
@@ -92,37 +92,33 @@ class VibeHash:
 
 
 class CacheMetadata:
-    """Metadata about a cached visualization."""
+    """Metadata about a cached visualization.
+    
+    Stores only essential data that cannot be retrieved elsewhere:
+    - cache_key: Universal identifier (contains city/date/time)
+    - hitboxes: Interactive regions (unique to this generation)
+    
+    Not stored (retrievable from other sources):
+    - vibe_vector: Retrievable from Hopsworks feature store
+    - source_articles: Retrievable from Hopsworks feature store
+    - image_url: Not needed (retrieved via storage API)
+    - city/timestamp: Already encoded in cache_key
+    """
 
     def __init__(
         self,
-        vibe_hash: str,
-        city: str,
-        timestamp: datetime,
-        vibe_vector: Dict[str, float],
-        image_url: str,
+        cache_key: str,
         hitboxes: List[Dict],
-        source_articles: List[Dict] = None,
     ):
-        self.vibe_hash = vibe_hash
-        self.city = city
-        self.timestamp = timestamp.isoformat()
-        self.vibe_vector = vibe_vector
-        self.image_url = image_url
+        self.cache_key = cache_key
         self.hitboxes = hitboxes
-        self.source_articles = source_articles or []
         self.created_at = datetime.utcnow().isoformat()
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON/DB storage."""
         return {
-            "vibe_hash": self.vibe_hash,
-            "city": self.city,
-            "timestamp": self.timestamp,
-            "vibe_vector": self.vibe_vector,
-            "image_url": self.image_url,
+            "cache_key": self.cache_key,
             "hitboxes": self.hitboxes,
-            "source_articles": self.source_articles,
             "created_at": self.created_at,
         }
 
@@ -130,13 +126,8 @@ class CacheMetadata:
     def from_dict(data: Dict) -> "CacheMetadata":
         """Reconstruct from dictionary."""
         metadata = CacheMetadata(
-            vibe_hash=data["vibe_hash"],
-            city=data["city"],
-            timestamp=datetime.fromisoformat(data["timestamp"]),
-            vibe_vector=data["vibe_vector"],
-            image_url=data["image_url"],
+            cache_key=data["cache_key"],
             hitboxes=data["hitboxes"],
-            source_articles=data.get("source_articles", []),
         )
         metadata.created_at = data.get("created_at", datetime.utcnow().isoformat())
         return metadata
@@ -146,18 +137,18 @@ class StorageBackend(ABC):
     """Abstract base class for storage backends."""
 
     @abstractmethod
-    def get_image(self, vibe_hash: str) -> Optional[bytes]:
-        """Retrieve image bytes for a vibe hash."""
+    def get_image(self, cache_key: str) -> Optional[bytes]:
+        """Retrieve image bytes for a cache_key."""
         pass
 
     @abstractmethod
-    def put_image(self, vibe_hash: str, image_data: bytes) -> str:
+    def put_image(self, cache_key: str, image_data: bytes) -> str:
         """Store image and return URL."""
         pass
 
     @abstractmethod
-    def get_metadata(self, vibe_hash: str) -> Optional[CacheMetadata]:
-        """Retrieve metadata for a vibe hash."""
+    def get_metadata(self, cache_key: str) -> Optional[CacheMetadata]:
+        """Retrieve metadata for a cache_key."""
         pass
 
     @abstractmethod
@@ -166,6 +157,6 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
-    def exists(self, vibe_hash: str) -> bool:
-        """Check if vibe hash is cached."""
+    def exists(self, cache_key: str) -> bool:
+        """Check if cache_key is cached."""
         pass

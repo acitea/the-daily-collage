@@ -51,7 +51,7 @@ class HopsworksStorageBackend(StorageBackend):
         """Check if connected to Hopsworks."""
         return self.artifacts is not None
 
-    def get_image(self, vibe_hash: str) -> Optional[bytes]:
+    def get_image(self, cache_key: str) -> Optional[bytes]:
         """Retrieve image from Hopsworks artifact registry."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks")
@@ -59,7 +59,7 @@ class HopsworksStorageBackend(StorageBackend):
 
         try:
             # Download artifact
-            artifact_name = f"{vibe_hash}.png"
+            artifact_name = f"{cache_key}.png"
             artifact_path = self.artifacts.download(
                 name=artifact_name,
                 collection=self.artifact_collection,
@@ -69,16 +69,16 @@ class HopsworksStorageBackend(StorageBackend):
             if artifact_path:
                 with open(artifact_path, "rb") as f:
                     image_data = f.read()
-                logger.debug(f"Retrieved image from Hopsworks: {vibe_hash}")
+                logger.debug(f"Retrieved image from Hopsworks: {cache_key}")
                 return image_data
 
             return None
 
         except Exception as e:
-            logger.debug(f"Failed to retrieve artifact {vibe_hash}: {e}")
+            logger.debug(f"Failed to retrieve artifact {cache_key}: {e}")
             return None
 
-    def put_image(self, vibe_hash: str, image_data: bytes) -> str:
+    def put_image(self, cache_key: str, image_data: bytes) -> str:
         """Store image in Hopsworks artifact registry."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks, cannot store image")
@@ -87,24 +87,24 @@ class HopsworksStorageBackend(StorageBackend):
         try:
             # Create in-memory file
             image_file = io.BytesIO(image_data)
-            image_file.name = f"{vibe_hash}.png"
+            image_file.name = f"{cache_key}.png"
 
             # Upload to Hopsworks artifact registry
             self.artifacts.upload(
                 artifact=image_file,
-                name=f"{vibe_hash}.png",
+                name=f"{cache_key}.png",
                 collection=self.artifact_collection,
-                description=f"Vibe visualization for {vibe_hash}",
+                description=f"Vibe visualization for {cache_key}",
             )
 
-            logger.info(f"Stored image in Hopsworks: {vibe_hash}")
-            return f"hopsworks://{self.artifact_collection}/{vibe_hash}.png"
+            logger.info(f"Stored image in Hopsworks: {cache_key}")
+            return f"hopsworks://{self.artifact_collection}/{cache_key}.png"
 
         except Exception as e:
             logger.error(f"Failed to store image in Hopsworks: {e}")
             return ""
 
-    def get_metadata(self, vibe_hash: str) -> Optional[CacheMetadata]:
+    def get_metadata(self, cache_key: str) -> Optional[CacheMetadata]:
         """Retrieve metadata from Hopsworks artifact registry."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks")
@@ -112,7 +112,7 @@ class HopsworksStorageBackend(StorageBackend):
 
         try:
             # Download metadata artifact
-            metadata_name = f"{vibe_hash}_metadata.json"
+            metadata_name = f"{cache_key}_metadata.json"
             metadata_path = self.artifacts.download(
                 name=metadata_name,
                 collection=self.artifact_collection,
@@ -121,13 +121,13 @@ class HopsworksStorageBackend(StorageBackend):
             if metadata_path:
                 with open(metadata_path, "r") as f:
                     metadata_dict = json.load(f)
-                logger.debug(f"Retrieved metadata from Hopsworks: {vibe_hash}")
+                logger.debug(f"Retrieved metadata from Hopsworks: {cache_key}")
                 return CacheMetadata.from_dict(metadata_dict)
 
             return None
 
         except Exception as e:
-            logger.debug(f"Failed to retrieve metadata {vibe_hash}: {e}")
+            logger.debug(f"Failed to retrieve metadata {cache_key}: {e}")
             return None
 
     def put_metadata(self, metadata: CacheMetadata) -> None:
@@ -140,29 +140,29 @@ class HopsworksStorageBackend(StorageBackend):
             # Serialize metadata to JSON
             metadata_json = json.dumps(metadata.to_dict(), indent=2)
             metadata_file = io.BytesIO(metadata_json.encode())
-            metadata_file.name = f"{metadata.vibe_hash}_metadata.json"
+            metadata_file.name = f"{metadata.cache_key}_metadata.json"
 
             # Upload to Hopsworks artifact registry
             self.artifacts.upload(
                 artifact=metadata_file,
-                name=f"{metadata.vibe_hash}_metadata.json",
+                name=f"{metadata.cache_key}_metadata.json",
                 collection=self.artifact_collection,
-                description=f"Metadata for vibe visualization {metadata.vibe_hash}",
+                description=f"Metadata for vibe visualization {metadata.cache_key}",
             )
 
-            logger.info(f"Stored metadata in Hopsworks: {metadata.vibe_hash}")
+            logger.info(f"Stored metadata in Hopsworks: {metadata.cache_key}")
 
         except Exception as e:
             logger.error(f"Failed to store metadata in Hopsworks: {e}")
 
-    def exists(self, vibe_hash: str) -> bool:
+    def exists(self, cache_key: str) -> bool:
         """Check if image exists in Hopsworks artifact registry."""
         if not self._is_connected():
             return False
 
         try:
             # Try to list artifacts with this name
-            artifact_name = f"{vibe_hash}.png"
+            artifact_name = f"{cache_key}.png"
             artifacts = self.artifacts.list(collection=self.artifact_collection)
 
             # Check if our artifact exists in the list
@@ -173,5 +173,5 @@ class HopsworksStorageBackend(StorageBackend):
             return False
 
         except Exception as e:
-            logger.debug(f"Failed to check artifact existence {vibe_hash}: {e}")
+            logger.debug(f"Failed to check artifact existence {cache_key}: {e}")
             return False

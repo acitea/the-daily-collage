@@ -304,12 +304,22 @@ async def get_vibe(
                 logger.info(f"Cache hit for {cache_key}")
                 hitboxes = [HitboxData(**hb) for hb in metadata.hitboxes]
                 
+                # Retrieve vibe_vector from Hopsworks (not stored in metadata)
+                vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
+                vibe_vector = {
+                    category: score
+                    for category, (score, tag, count) in vibe_data.items()
+                } if vibe_data else {}
+                
+                # Construct image URL from cache_key
+                image_url = f"/api/visualization/{cache_key}/image"
+                
                 return VisualizationResponse(
                     city=city,
                     cache_key=cache_key,
-                    image_url=metadata.image_url,
+                    image_url=image_url,
                     hitboxes=hitboxes,
-                    vibe_vector=metadata.vibe_vector,
+                    vibe_vector=vibe_vector,
                     cached=True,
                     generated_at=datetime.utcnow().isoformat(),
                 )
@@ -402,13 +412,16 @@ async def get_vibe(
         # Build response with hitbox objects
         hitboxes = [HitboxData(**hb) for hb in metadata.get("hitboxes", [])]
         
+        # Construct image URL from cache_key
+        image_url = f"/api/visualization/{metadata['cache_key']}/image"
+        
         return VisualizationResponse(
             city=city,
             cache_key=metadata["cache_key"],
-            image_url=metadata["image_url"],
+            image_url=image_url,
             hitboxes=hitboxes,
             vibe_vector=vibe_vector,
-            cached=metadata["cached"],
+            cached=metadata.get("cached", False),
             generated_at=datetime.utcnow().isoformat(),
         )
         
@@ -517,21 +530,54 @@ async def get_visualization_image(
         # Attempt on-demand regeneration
         logger.info(f"Image not found for {cache_key}, attempting regeneration")
         
-        # Get metadata to reconstruct generation parameters
-        metadata = storage.get_metadata(cache_key)
+        # Parse cache_key to get city and timestamp
+        from backend.storage.core import VibeHash
+        cache_info = VibeHash.extract_info(cache_key)
         
-        if not metadata:
+        if not cache_info:
             raise HTTPException(
-                status_code=404,
-                detail=f"Metadata not found for cache key: {cache_key}. Cannot regenerate.",
+                status_code=400,
+                detail=f"Invalid cache_key format: {cache_key}",
             )
         
-        # Regenerate visualization using stored metadata
+        city = cache_info["city"].title()
+        date = cache_info["date"]
+        window = cache_info["window"]
+        window_start_hour = int(window.split("-")[0])
+        timestamp = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+        
+        # Get vibe_vector from Hopsworks
+        if not hopsworks_service:
+            raise HTTPException(
+                status_code=503,
+                detail="Hopsworks service not available. Cannot retrieve vibe data for regeneration.",
+            )
+        
+        vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
+        if not vibe_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No vibe data found in Hopsworks for {cache_key}. Cannot regenerate.",
+            )
+        
+        vibe_vector = {
+            category: score
+            for category, (score, tag, count) in vibe_data.items()
+        }
+        
+        # Get source articles
+        source_articles = []
+        try:
+            source_articles = hopsworks_service.get_headlines_for_city(city=city, timestamp=timestamp)
+        except Exception as e:
+            logger.warning(f"Could not retrieve source articles: {e}")
+        
+        # Regenerate visualization
         image_data, new_metadata = viz_service.generate_or_get(
-            city=metadata.city,
-            vibe_vector=metadata.vibe_vector,
-            timestamp=metadata.timestamp,
-            source_articles=metadata.source_articles,
+            city=city,
+            vibe_vector=vibe_vector,
+            timestamp=timestamp,
+            source_articles=source_articles,
             force_regenerate=True,
         )
         
@@ -633,33 +679,50 @@ async def get_hitboxes(cache_key: str):
 async def get_articles_for_vibe(cache_key: str):
     """
     Get source articles that contributed to a visualization.
+    
+    Articles are retrieved from Hopsworks feature store, not from cached metadata.
 
     Args:
-        cache_key: Key from /api/visualization request
+        cache_key: Cache key for the visualization
 
     Returns:
         List of articles with metadata and signal associations
     """
-    if not viz_service:
+    if not hopsworks_service:
         raise HTTPException(
-            status_code=503, detail="Visualization service not initialized"
+            status_code=503,
+            detail="Hopsworks service not available. Cannot retrieve articles.",
         )
 
     try:
-        storage = viz_service.cache.storage
-        metadata = storage.get_metadata(cache_key)
-
-        if not metadata:
+        # Parse cache_key to extract city and timestamp
+        from backend.storage.core import VibeHash
+        cache_info = VibeHash.extract_info(cache_key)
+        
+        if not cache_info:
             raise HTTPException(
-                status_code=404,
-                detail=f"Metadata not found for cache key: {cache_key}",
+                status_code=400,
+                detail=f"Invalid cache_key format: {cache_key}",
             )
-
+        
+        city = cache_info["city"].title()
+        date = cache_info["date"]
+        window = cache_info["window"]
+        window_start_hour = int(window.split("-")[0])
+        timestamp = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+        
+        # Retrieve headlines from Hopsworks
+        articles = hopsworks_service.get_headlines_for_city(
+            city=city,
+            timestamp=timestamp,
+        )
+        
         return JSONResponse(
             content={
                 "cache_key": cache_key,
-                "city": metadata.city,
-                "articles": metadata.source_articles,
+                "city": city,
+                "timestamp": timestamp.isoformat(),
+                "articles": articles,
             }
         )
 
