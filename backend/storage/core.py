@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from backend.visualization.assets import Hitbox
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,7 +110,7 @@ class CacheMetadata:
     def __init__(
         self,
         cache_key: str,
-        hitboxes: List[Dict],
+        hitboxes: List[Hitbox],
     ):
         self.cache_key = cache_key
         self.hitboxes = hitboxes
@@ -127,7 +129,7 @@ class CacheMetadata:
         """Reconstruct from dictionary."""
         metadata = CacheMetadata(
             cache_key=data["cache_key"],
-            hitboxes=data["hitboxes"],
+            hitboxes=[Hitbox(**hb) for hb in data["hitboxes"]],
         )
         metadata.created_at = data.get("created_at", datetime.utcnow().isoformat())
         return metadata

@@ -14,6 +14,7 @@ dependencies = [
     "gunicorn>=21.0",
     "pillow>=10.0.0",
     "tenacity>=8.0.0",
+    "hopsworks[python]>=4.6.0",
 ]
 
 [project.optional-dependencies]
