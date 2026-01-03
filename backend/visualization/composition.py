@@ -243,7 +243,7 @@ class VisualizationService:
                 logger.info(f"Cache hit for {city}")
                 return image_data, {
                     "cached": True,
-                    "vibe_hash": metadata.vibe_hash,
+                    "cache_key": metadata.vibe_hash,
                     "image_url": metadata.image_url,
                     "hitboxes": metadata.hitboxes,
                     "vibe_vector": metadata.vibe_vector,
@@ -265,7 +265,7 @@ class VisualizationService:
 
         return image_data, {
             "cached": False,
-            "vibe_hash": metadata.vibe_hash,
+            "cache_key": metadata.vibe_hash,
             "image_url": image_url,
             "hitboxes": hitboxes,
             "vibe_vector": vibe_vector,

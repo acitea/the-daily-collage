@@ -77,7 +77,7 @@ class VisualizationResponse(BaseModel):
     """Response for visualization request."""
 
     city: str
-    vibe_hash: str
+    cache_key: str
     image_url: str
     hitboxes: List[HitboxData]
     vibe_vector: Dict[str, float]
@@ -88,7 +88,7 @@ class VisualizationResponse(BaseModel):
 class CacheStatusResponse(BaseModel):
     """Response for cache status."""
 
-    vibe_hash: str
+    cache_key: str
     cached: bool
     timestamp: str
 
@@ -192,7 +192,7 @@ async def create_visualization(request: VibeVectorRequest):
 
         return VisualizationResponse(
             city=request.city,
-            vibe_hash=metadata["vibe_hash"],
+            cache_key=metadata["cache_key"],
             image_url=metadata["image_url"],
             hitboxes=hitboxes,
             vibe_vector=request.vibe_vector,
@@ -207,13 +207,13 @@ async def create_visualization(request: VibeVectorRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/visualization/{vibe_hash}/image", tags=["Visualization"])
-async def get_visualization_image(vibe_hash: str):
+@app.get("/api/visualization/{cache_key}/image", tags=["Visualization"])
+async def get_visualization_image(cache_key: str):
     """
     Get the actual image for a cached visualization.
 
     Args:
-        vibe_hash: Hash from previous /api/visualization request
+        cache_key: Key from previous /api/visualization request
 
     Returns:
         PNG image data
@@ -226,12 +226,12 @@ async def get_visualization_image(vibe_hash: str):
     try:
         # Try to retrieve from storage
         storage = viz_service.cache.storage
-        image_data = storage.get_image(vibe_hash)
+        image_data = storage.get_image(cache_key)
 
         if not image_data:
             raise HTTPException(
                 status_code=404,
-                detail=f"Image not found for vibe hash: {vibe_hash}",
+                detail=f"Image not found for cache key: {cache_key}",
             )
 
         return Response(content=image_data, media_type="image/png")
@@ -275,9 +275,10 @@ async def check_cache_status(
         cached = viz_service.cache.exists(city, timestamp)
 
         from backend.storage import VibeHash
+        cache_key = VibeHash.generate(city, timestamp)
 
         return CacheStatusResponse(
-            vibe_hash=vibe_hash,
+            cache_key=cache_key,
             cached=cached,
             timestamp=timestamp.isoformat(),
         )
@@ -289,15 +290,15 @@ async def check_cache_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/hitboxes/{vibe_hash}", tags=["Metadata"])
-async def get_hitboxes(vibe_hash: str):
+@app.get("/api/hitboxes/{cache_key}", tags=["Metadata"])
+async def get_hitboxes(cache_key: str):
     """
     Get hitbox metadata for a cached visualization.
 
     These are the clickable regions in the image.
 
     Args:
-        vibe_hash: Hash from /api/visualization request
+        cache_key: Key from /api/visualization request
 
     Returns:
         List of hitboxes with signal info
@@ -309,12 +310,12 @@ async def get_hitboxes(vibe_hash: str):
 
     try:
         storage = viz_service.cache.storage
-        metadata = storage.get_metadata(vibe_hash)
+        metadata = storage.get_metadata(cache_key)
 
         if not metadata:
             raise HTTPException(
                 status_code=404,
-                detail=f"Metadata not found for vibe hash: {vibe_hash}",
+                detail=f"Metadata not found for cache key: {cache_key}",
             )
 
         return JSONResponse(content={"hitboxes": metadata.hitboxes})
@@ -326,13 +327,13 @@ async def get_hitboxes(vibe_hash: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/articles/{vibe_hash}", tags=["Articles"])
-async def get_articles_for_vibe(vibe_hash: str):
+@app.get("/api/articles/{cache_key}", tags=["Articles"])
+async def get_articles_for_vibe(cache_key: str):
     """
     Get source articles that contributed to a visualization.
 
     Args:
-        vibe_hash: Hash from /api/visualization request
+        cache_key: Key from /api/visualization request
 
     Returns:
         List of articles with metadata and signal associations
@@ -344,17 +345,17 @@ async def get_articles_for_vibe(vibe_hash: str):
 
     try:
         storage = viz_service.cache.storage
-        metadata = storage.get_metadata(vibe_hash)
+        metadata = storage.get_metadata(cache_key)
 
         if not metadata:
             raise HTTPException(
                 status_code=404,
-                detail=f"Metadata not found for vibe hash: {vibe_hash}",
+                detail=f"Metadata not found for cache key: {cache_key}",
             )
 
         return JSONResponse(
             content={
-                "vibe_hash": vibe_hash,
+                "cache_key": cache_key,
                 "city": metadata.city,
                 "articles": metadata.source_articles,
             }
