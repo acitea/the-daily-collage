@@ -1,0 +1,129 @@
+"""
+Quick bootstrap data collection in under 1 hour.
+Fetches articles from GDELT and auto-labels with keywords.
+"""
+
+import sys
+from pathlib import Path
+import polars as pl
+from datetime import datetime, timedelta
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from ml.ingestion.script import fetch_news
+from ml.ingestion.hopsworks_pipeline import classify_article, SIGNAL_CATEGORIES
+
+def quick_bootstrap(
+    countries: list = ["sweden"],
+    articles_per_country: int = 500,
+    output_dir: str = "ml/data"
+):
+    """
+    Bootstrap 500-1000 labeled articles in ~10 minutes.
+    """
+    print("🚀 Starting quick bootstrap...")
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    all_articles = []
+    
+    for country in countries:
+        print(f"\n📰 Fetching {articles_per_country} articles from {country}...")
+        try:
+            df = fetch_news(country=country, max_articles=articles_per_country)
+        except Exception as e:
+            print(f"⚠️  Error fetching {country}: {e}")
+            continue
+
+        if df.is_empty():
+            print(f"⚠️  No articles found for {country}")
+            continue
+
+        print(f"✓ Got {len(df)} articles, classifying...")
+
+        for idx, row in enumerate(df.iter_rows(named=True)):
+            title = row.get("title", "")
+            description = row.get("description", "")
+
+            # Auto-classify using keywords
+            signals = classify_article(title, description)
+
+            article_data = {
+                "title": title,
+                "description": description,
+                "url": row.get("url", ""),
+                "source": row.get("source", ""),
+            }
+
+            # Add labels (0.0 / "" for missing categories)
+            for category in SIGNAL_CATEGORIES:
+                if category in signals:
+                    score, tag = signals[category]
+                    article_data[f"{category}_score"] = score
+                    article_data[f"{category}_tag"] = tag
+                else:
+                    article_data[f"{category}_score"] = 0.0
+                    article_data[f"{category}_tag"] = ""
+
+            all_articles.append(article_data)
+
+            if (idx + 1) % 100 == 0:
+                print(f"  {idx + 1}/{len(df)} classified")
+
+    print(f"\n✓ Total articles: {len(all_articles)}")
+
+    # Create DataFrame
+    df_all = pl.DataFrame(all_articles)
+
+    # Shuffle
+    df_all = df_all.sample(fraction=1.0, shuffle=True)
+
+    # Split: 70% train, 30% val
+    n = len(df_all)
+    split_idx = int(0.7 * n)
+
+    train_df = df_all[:split_idx]
+    val_df = df_all[split_idx:]
+
+    # Save
+    train_path = output_path / "train_bootstrap.parquet"
+    val_path = output_path / "val_bootstrap.parquet"
+
+    train_df.write_parquet(train_path)
+    val_df.write_parquet(val_path)
+
+    print(f"\n✓ Saved training data: {train_path}")
+    print(f"  Train: {len(train_df)}, Val: {len(val_df)}")
+    print(f"\n✓ Saved validation data: {val_path}")
+
+    # Print sample statistics
+    print("\n📊 Signal distribution:")
+    for cat in SIGNAL_CATEGORIES:
+        non_zero = df_all.filter(pl.col(f"{cat}_score") != 0.0).height
+        pct = (non_zero / len(df_all)) * 100
+        print(f"  {cat:20s}: {non_zero:4d} articles ({pct:5.1f}%)")
+
+    return train_path, val_path
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--countries", nargs="+", default=["sweden"], help="Countries to fetch")
+    parser.add_argument("--articles-per-country", type=int, default=500)
+    parser.add_argument("--output-dir", default="ml/data")
+
+    args = parser.parse_args()
+
+    train_path, val_path = quick_bootstrap(
+        countries=args.countries,
+        articles_per_country=args.articles_per_country,
+        output_dir=args.output_dir,
+    )
+
+    print(f"\n✅ Bootstrap complete!")
+    print(f"   Train: {train_path}")
+    print(f"   Val:   {val_path}")
