@@ -60,7 +60,6 @@ class StabilityAIPoller:
         image_data: bytes,
         prompt: Optional[str] = None,
         negative_prompt: Optional[str] = None,
-        atmosphere_prompt: Optional[str] = None,
     ) -> Optional[bytes]:
         """
         Apply Stability AI polish to an image.
@@ -70,10 +69,8 @@ class StabilityAIPoller:
 
         Args:
             image_data: PIL Image bytes (PNG)
-            prompt: Optional positive prompt for style
-            negative_prompt: Optional negative prompt
-            atmosphere_prompt: Optional description of atmosphere to enhance
-                              (e.g., "rainy weather", "celebration mood")
+            prompt: Complete positive prompt (including atmosphere if needed)
+            negative_prompt: Complete negative prompt (including atmosphere if needed)
 
         Returns:
             bytes: Polished image PNG data, or input image if polish failed
@@ -88,7 +85,6 @@ class StabilityAIPoller:
                 image_data=image_data,
                 prompt=prompt,
                 negative_prompt=negative_prompt,
-                atmosphere_prompt=atmosphere_prompt,
             )
             
             if polished_data:
@@ -115,7 +111,6 @@ class StabilityAIPoller:
         image_data: bytes,
         prompt: Optional[str] = None,
         negative_prompt: Optional[str] = None,
-        atmosphere_prompt: Optional[str] = None,
     ) -> Optional[bytes]:
         """
         Internal method to call Stability AI API with retry logic.
@@ -124,9 +119,8 @@ class StabilityAIPoller:
         
         Args:
             image_data: PIL Image bytes (PNG)
-            prompt: Optional positive prompt for style
-            negative_prompt: Optional negative prompt
-            atmosphere_prompt: Optional atmosphere description
+            prompt: Complete positive prompt for style (includes atmosphere)
+            negative_prompt: Complete negative prompt (includes atmosphere)
             
         Returns:
             bytes: Polished image PNG data or None if API returns error
@@ -135,17 +129,13 @@ class StabilityAIPoller:
             requests.Timeout: If request times out (will be retried)
             requests.ConnectionError: If connection fails (will be retried)
         """
-        # Build prompts
+        # Use provided prompts or defaults
         if not prompt:
             prompt = (
                 "a colorful sticker scrapbook collage, playful cartoon stickers, "
                 "vibrant colors, whimsical illustration style, "
                 "artistic arrangement, scrapbook aesthetic"
             )
-
-        # Incorporate atmosphere prompt if provided
-        if atmosphere_prompt:
-            prompt = f"{prompt}, {atmosphere_prompt}"
 
         if not negative_prompt:
             negative_prompt = (
@@ -223,16 +213,14 @@ class MockStabilityAIPoller:
         image_data: bytes,
         prompt: Optional[str] = None,
         negative_prompt: Optional[str] = None,
-        atmosphere_prompt: Optional[str] = None,
     ) -> Optional[bytes]:
         """
         Mock polish: return input unchanged.
 
         Args:
             image_data: Input image bytes
-            prompt: Ignored
+            prompt: Ignored (logged for debugging)
             negative_prompt: Ignored
-            atmosphere_prompt: Ignored
 
         Returns:
             bytes: Same image data
@@ -240,8 +228,8 @@ class MockStabilityAIPoller:
         logger.info(
             f"Mock Polish: returning input unchanged (image_strength={self.image_strength})"
         )
-        if atmosphere_prompt:
-            logger.debug(f"Mock Polish (would apply atmosphere): {atmosphere_prompt}")
+        if prompt:
+            logger.debug(f"Mock Polish prompt: {prompt}")
         return image_data
 
 

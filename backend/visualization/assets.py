@@ -64,23 +64,6 @@ class AssetLibrary:
         ("transportation", "accident", "low"): "transportation_accident_low.png",
         ("transportation", "accident", "med"): "transportation_accident_med.png",
         ("transportation", "accident", "high"): "transportation_accident_high.png",
-        # Weather - Temperature
-        ("weather_temp", "hot", "low"): "weather_hot_low.png",
-        ("weather_temp", "hot", "med"): "weather_hot_med.png",
-        ("weather_temp", "hot", "high"): "weather_hot_high.png",
-        ("weather_temp", "cold", "low"): "weather_cold_low.png",
-        ("weather_temp", "cold", "med"): "weather_cold_med.png",
-        ("weather_temp", "cold", "high"): "weather_cold_high.png",
-        # Weather - Precipitation
-        ("weather_wet", "rain", "low"): "weather_rain_low.png",
-        ("weather_wet", "rain", "med"): "weather_rain_med.png",
-        ("weather_wet", "rain", "high"): "weather_rain_high.png",
-        ("weather_wet", "snow", "low"): "weather_snow_low.png",
-        ("weather_wet", "snow", "med"): "weather_snow_med.png",
-        ("weather_wet", "snow", "high"): "weather_snow_high.png",
-        ("weather_wet", "flood", "low"): "weather_flood_low.png",
-        ("weather_wet", "flood", "med"): "weather_flood_med.png",
-        ("weather_wet", "flood", "high"): "weather_flood_high.png",
         # Crime
         ("crime", "theft", "low"): "crime_theft_low.png",
         ("crime", "theft", "med"): "crime_theft_med.png",
@@ -148,12 +131,6 @@ class AssetLibrary:
         ("transportation", "low"): "transportation_generic_low.png",
         ("transportation", "med"): "transportation_generic_med.png",
         ("transportation", "high"): "transportation_generic_high.png",
-        ("weather_temp", "low"): "weather_temp_generic_low.png",
-        ("weather_temp", "med"): "weather_temp_generic_med.png",
-        ("weather_temp", "high"): "weather_temp_generic_high.png",
-        ("weather_wet", "low"): "weather_wet_generic_low.png",
-        ("weather_wet", "med"): "weather_wet_generic_med.png",
-        ("weather_wet", "high"): "weather_wet_generic_high.png",
         ("crime", "low"): "crime_generic_low.png",
         ("crime", "med"): "crime_generic_med.png",
         ("crime", "high"): "crime_generic_high.png",
@@ -172,31 +149,6 @@ class AssetLibrary:
         ("emergencies", "low"): "emergencies_generic_low.png",
         ("emergencies", "med"): "emergencies_generic_med.png",
         ("emergencies", "high"): "emergencies_generic_high.png",
-    }
-
-    # Atmosphere assets: apply to entire image, not in zones
-    # Mapped by category -> tag -> filename
-    ATMOSPHERE_MAP = {
-        "weather_wet": {
-            "rain": "atmosphere_rain.png",
-            "snow": "atmosphere_snow.png",
-            "flood": "atmosphere_flood.png",
-        },
-        "weather_temp": {
-            "hot": "atmosphere_heat.png",
-            "cold": "atmosphere_cold.png",
-        },
-        "festivals": {
-            "celebration": "atmosphere_celebration.png",
-            "crowd": "atmosphere_festive.png",
-        },
-        "politics": {
-            "protest": "atmosphere_tension.png",
-        },
-        "emergencies": {
-            "fire": "atmosphere_fire_glow.png",
-            "earthquake": "atmosphere_tremor.png",
-        },
     }
 
     # Ultimate fallback
@@ -309,70 +261,6 @@ class AssetLibrary:
         asset = self.get_asset(category, tag, intensity)
         return asset.size if asset else None
 
-    def get_atmosphere_asset(
-        self,
-        category: str,
-        tag: str,
-    ) -> Optional[Image.Image]:
-        """
-        Get atmosphere asset for a category + tag combination.
-
-        Atmosphere assets overlay the entire image rather than being
-        placed in a specific zone. Used to inject overall mood.
-
-        Args:
-            category: Signal category (e.g., 'weather_wet')
-            tag: Signal tag (e.g., 'rain')
-
-        Returns:
-            PIL Image or None if not found
-        """
-        # Check if category has atmosphere assets
-        if category not in self.ATMOSPHERE_MAP:
-            return None
-
-        # Try exact tag match
-        filename = self.ATMOSPHERE_MAP[category].get(tag)
-
-        if not filename:
-            return None
-
-        # Check cache
-        if filename in self.loaded_assets:
-            return self.loaded_assets[filename]
-
-        # Try to load from disk
-        asset_path = self.assets_dir / filename
-        if asset_path.exists():
-            try:
-                img = Image.open(asset_path).convert("RGBA")
-                self.loaded_assets[filename] = img
-                return img
-            except Exception as e:
-                logger.error(f"Failed to load atmosphere asset {filename}: {e}")
-                self.loaded_assets[filename] = None
-                return None
-        else:
-            logger.debug(f"Atmosphere asset file not found: {asset_path}")
-            self.loaded_assets[filename] = None
-            return None
-
-    def has_atmosphere_asset(self, category: str, tag: str) -> bool:
-        """
-        Check if an atmosphere asset exists for category + tag.
-
-        Args:
-            category: Signal category
-            tag: Signal tag
-
-        Returns:
-            bool: True if atmosphere asset available
-        """
-        return (
-            category in self.ATMOSPHERE_MAP
-            and tag in self.ATMOSPHERE_MAP[category]
-        )
-
 
 class ZoneLayoutComposer:
     """
@@ -422,16 +310,18 @@ class ZoneLayoutComposer:
     def compose(
         self,
         signals: List[Tuple[str, str, float, float]],
-        apply_atmosphere_assets: bool = True,
     ) -> Tuple[Image.Image, List[Hitbox]]:
         """
-        Compose image with signals placed in zones, optionally with atmosphere overlay.
+        Compose image with signals placed in zones.
+
+        Note: apply_atmosphere_assets parameter is deprecated and ignored.
+        Atmosphere is now handled via prompting only.
 
         Args:
             signals: List of (category, tag, intensity, score) tuples
                      intensity: 0.0-1.0 (used for sizing)
                      score: original -1.0 to 1.0 score from model
-            apply_atmosphere_assets: If True, apply atmosphere overlays from signals
+            apply_atmosphere_assets: Deprecated, ignored (kept for API compatibility)
 
         Returns:
             Tuple[Image, hitboxes]: Composed PIL Image and hitbox list
@@ -448,10 +338,6 @@ class ZoneLayoutComposer:
         # Place assets in each zone
         for zone_name, zone_signals in zone_assignments.items():
             self._place_signals_in_zone(image, zone_name, zone_signals)
-
-        # Apply atmosphere overlays on top
-        if apply_atmosphere_assets:
-            self._apply_atmosphere_layers(image, signals)
 
         return image, self.hitboxes
 
@@ -578,54 +464,3 @@ class ZoneLayoutComposer:
             List of hitbox dicts
         """
         return [h.to_dict() for h in self.hitboxes]
-
-    def _apply_atmosphere_layers(
-        self,
-        image: Image.Image,
-        signals: List[Tuple[str, str, float, float]],
-    ) -> None:
-        """
-        Apply full-image atmosphere overlays based on dominant signals.
-
-        Atmosphere assets (e.g., rain effect, heat haze) are overlaid
-        on top of zone-based elements to enhance mood.
-
-        Args:
-            image: PIL Image to apply effects to (modified in-place)
-            signals: List of (category, tag, intensity, score) tuples
-        """
-        # Collect atmosphere assets by intensity (apply strongest last for prominence)
-        atmospheres = []
-
-        for category, tag, intensity, score in signals:
-            if self.asset_library.has_atmosphere_asset(category, tag):
-                atmospheres.append((intensity, category, tag))
-
-        # Sort by intensity (weakest first, so strongest overlays on top)
-        atmospheres.sort(key=lambda x: x[0])
-
-        # Apply each atmosphere asset
-        for intensity, category, tag in atmospheres:
-            atmosphere = self.asset_library.get_atmosphere_asset(category, tag)
-            if atmosphere:
-                # Scale atmosphere to canvas size
-                atmosphere_scaled = atmosphere.resize(
-                    (self.image_width, self.image_height),
-                    Image.Resampling.LANCZOS
-                )
-
-                # Apply with opacity based on intensity
-                # Higher intensity = more opaque atmosphere
-                opacity = int(255 * min(intensity, 1.0))
-                atmosphere_scaled.putalpha(opacity)
-
-                # Composite over current image
-                image.paste(
-                    atmosphere_scaled,
-                    (0, 0),
-                    atmosphere_scaled,
-                )
-
-                logger.debug(
-                    f"Applied atmosphere: {category}/{tag} at opacity {opacity}"
-                )

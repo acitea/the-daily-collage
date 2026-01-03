@@ -25,13 +25,6 @@ class VibeHashSettings:
     enable_cache: bool = True
 
 
-class AtmosphereStrategy(Enum):
-    """Strategy for adding atmospheric effects to visualization."""
-
-    ASSET = "asset"  # Use PNG overlays applied to entire image
-    PROMPT = "prompt"  # Add atmosphere via text prompt to img2img
-
-
 @dataclass
 class StabilityAISettings:
     """Settings for Stability AI Img2Img polishing."""
@@ -59,16 +52,6 @@ class StabilityAISettings:
 
     # Timeout for Stability API requests (seconds)
     timeout_seconds: int = 60
-
-    # Strategy for atmospheric effects
-    atmosphere_strategy: str = os.getenv(
-        "STABILITY_ATMOSPHERE_STRATEGY", "prompt"
-    ).lower()
-
-    # Add atmospheric description to prompt (if using PROMPT strategy)
-    include_atmosphere_in_prompt: bool = os.getenv(
-        "STABILITY_INCLUDE_ATMOSPHERE_IN_PROMPT", "true"
-    ).lower() == "true"
 
 
 @dataclass

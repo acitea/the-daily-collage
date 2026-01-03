@@ -15,7 +15,7 @@ from datetime import datetime
 from PIL import Image
 import io
 
-from backend.settings import settings, AtmosphereStrategy
+from backend.settings import settings
 from backend.visualization.assets import ZoneLayoutComposer
 from backend.visualization.polish import create_poller
 from backend.storage import VibeCache, create_storage_backend
@@ -70,9 +70,8 @@ class HybridComposer:
         """
         Compose visualization from vibe vector.
 
-        Supports two atmosphere strategies:
-        - ASSET: PNG overlays applied to entire image
-        - PROMPT: Atmospheric descriptions in img2img prompt
+        Uses prompt-based atmosphere enhancement to add weather mood and
+        ambience without overlaying assets that could obscure core elements.
 
         Args:
             vibe_vector: Dict mapping signal categories to scores (-1.0 to 1.0)
@@ -92,14 +91,9 @@ class HybridComposer:
             for category, (tag, intensity) in self._expand_vibe_vector(vibe_vector).items()
         ]
 
-        # Determine whether to apply atmosphere assets in layout
-        use_atmosphere_assets = (
-            settings.stability_ai.atmosphere_strategy == AtmosphereStrategy.ASSET.value
-        )
-
+        # Layout without atmosphere assets (prompt-only strategy)
         layout_image, hitboxes = self.layout_composer.compose(
-            signals,
-            apply_atmosphere_assets=use_atmosphere_assets,
+            signals
         )
 
         # Convert PIL image to bytes
@@ -112,30 +106,37 @@ class HybridComposer:
             f"Polishing image with Stability AI (strength={settings.stability_ai.image_strength})"
         )
 
-        # Generate atmosphere prompt if using PROMPT strategy
-        atmosphere_prompt = None
-        if (
-            settings.stability_ai.atmosphere_strategy == AtmosphereStrategy.PROMPT.value
-            and settings.stability_ai.include_atmosphere_in_prompt
-        ):
-            atmosphere_prompt = AtmosphereDescriptor.generate_atmosphere_prompt(
-                signals
-            )
-            if atmosphere_prompt:
-                logger.debug(f"Atmosphere prompt: {atmosphere_prompt}")
+        # Generate weather-based atmosphere prompts
+        atmosphere_positive, atmosphere_negative = AtmosphereDescriptor.generate_atmosphere_prompt(
+            signals
+        )
+
+        # Build base prompt
+        base_prompt = (
+            "A colorful sticker scrapbook collage, "
+            f"{location}, playful cartoon stickers, "
+            "vibrant colors, whimsical illustration style"
+        )
+
+        # Combine with atmosphere
+        final_prompt = base_prompt
+        if atmosphere_positive:
+            final_prompt = f"{base_prompt}, {atmosphere_positive}"
+            logger.debug(f"Using atmosphere: {atmosphere_positive}")
+
+        # Build negative prompt
+        base_negative = (
+            "blurry, low quality, distorted, moved objects, photorealistic, "
+            "realistic, 3d render, photograph"
+        )
+        final_negative = base_negative
+        if atmosphere_negative:
+            final_negative = f"{base_negative}, {atmosphere_negative}"
 
         polished_data = self.poller.polish(
             layout_data,
-            prompt=(
-                "A colorful sticker scrapbook collage, "
-                f"{location}, playful cartoon stickers, "
-                "vibrant colors, whimsical illustration style"
-            ),
-            negative_prompt=(
-                "blurry, low quality, distorted, moved objects, photorealistic, "
-                "realistic, 3d render, photograph"
-            ),
-            atmosphere_prompt=atmosphere_prompt,
+            prompt=final_prompt,
+            negative_prompt=final_negative,
         )
 
         final_data = polished_data if polished_data else layout_data

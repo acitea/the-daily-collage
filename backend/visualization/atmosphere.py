@@ -1,181 +1,159 @@
 """
-Atmosphere generation for visual and textual enhancements.
+Atmosphere generation through text prompting.
 
-Supports two strategies:
-1. Asset-based: PNG overlays applied to entire image
-2. Prompt-based: Text descriptions incorporated into img2img prompts
+Generates high-quality atmospheric prompts based on weather conditions
+and signal composition for use in img2img enhancement.
 """
 
 from typing import List, Tuple, Dict, Optional
-from enum import Enum
-
-
-class AtmosphereStrategy(Enum):
-    """Strategy for applying atmospheric effects."""
-
-    ASSET = "asset"  # Use PNG overlays
-    PROMPT = "prompt"  # Use text prompts
 
 
 class AtmosphereDescriptor:
     """
-    Generates atmospheric descriptions and moods based on signal composition.
+    Generates atmospheric prompts based on weather and signal composition.
 
-    Maps vibe vector signals to evocative atmospheric language for use in
-    img2img prompts.
+    Uses high-quality positive and negative prompts to create mood and
+    atmosphere without overlaying assets that could obscure core elements.
     """
 
-    # Mapping of (category, tag) -> atmosphere descriptions
-    ATMOSPHERE_DESCRIPTIONS = {
-        ("weather_wet", "rain"): [
-            "rainy and gloomy",
-            "wet streets reflecting light",
-            "overcast atmosphere",
-        ],
-        ("weather_wet", "snow"): [
-            "snowy and peaceful",
-            "winter wonderland",
-            "cold and crisp",
-        ],
-        ("weather_wet", "flood"): [
-            "chaotic and wet",
-            "water-logged environment",
-            "disaster atmosphere",
-        ],
-        ("weather_temp", "hot"): [
-            "hot and vibrant",
-            "heat haze shimmer",
-            "bright and warm",
-        ],
-        ("weather_temp", "cold"): [
-            "cold and stark",
-            "frosty atmosphere",
-            "crisp and icy",
-        ],
-        ("emergencies", "fire"): [
-            "flames and danger",
-            "fiery and intense",
-            "dramatic emergency",
-        ],
-        ("emergencies", "earthquake"): [
-            "chaotic and unstable",
-            "trembling ground",
-            "disaster atmosphere",
-        ],
-        ("festivals", "celebration"): [
-            "festive and joyful",
-            "celebration mood",
-            "colorful and lively",
-        ],
-        ("festivals", "crowd"): [
-            "crowded and energetic",
-            "bustling activity",
-            "mass gathering",
-        ],
-        ("politics", "protest"): [
-            "tense and confrontational",
-            "protest mood",
-            "charged atmosphere",
-        ],
-        ("crime", "police"): [
-            "law enforcement presence",
-            "official atmosphere",
-            "security focus",
-        ],
-        ("sports", "victory"): [
-            "celebratory and triumphant",
-            "victory atmosphere",
-            "excitement and joy",
-        ],
-        ("economics", "market"): [
-            "busy commercial activity",
-            "trading floor energy",
-            "business atmosphere",
-        ],
+    # Weather-specific atmosphere prompts: (category, tag) -> {positive, negative}
+    WEATHER_ATMOSPHERE_PROMPTS = {
+        # Rain
+        ("weather_wet", "rain"): {
+            "positive": (
+                "heavy rain, storm, wet ground, puddles, reflections on streets, "
+                "overcast sky, gloomy atmosphere, cinematic lighting, raindrops, "
+                "mist, high contrast, cool color tone, splashing water"
+            ),
+            "negative": (
+                "bright sun, dry ground, clear sky, blue sky, dust, warm lighting, "
+                "happy, vivid colors, flat lighting"
+            ),
+        },
+        # Snow
+        ("weather_wet", "snow"): {
+            "positive": (
+                "heavy snow, winter storm, snow covered ground, frost, ice, "
+                "snowflakes in air, white atmosphere, frozen, cold, blizzard, "
+                "soft blue ambient light, winter"
+            ),
+            "negative": (
+                "summer, green grass, flowers, sun, heat, warm colors, rain, "
+                "water, asphalt, leaves"
+            ),
+        },
+        # Flood (use rain as base + intensity)
+        ("weather_wet", "flood"): {
+            "positive": (
+                "heavy rain, storm, thunderstorm, flooding, water everywhere, "
+                "puddles, reflections, overcast sky, dramatic weather, "
+                "wet surfaces, water splashing"
+            ),
+            "negative": (
+                "bright sun, dry ground, clear sky, dust, warm lighting, happy"
+            ),
+        },
+        # Hot/Dry
+        ("weather_temp", "hot"): {
+            "positive": (
+                "desert heat, heat wave, heat haze, shimmering air, intense sun, "
+                "drought, dry cracked ground, dusty, sepia tone, overexposed, "
+                "harsh sunlight, arid, warm color palette, yellow tint"
+            ),
+            "negative": (
+                "water, rain, clouds, cold, blue tones, lush vegetation, wet, "
+                "snow, puddles, soft lighting, cool colors"
+            ),
+        },
+        # Cold (but not snowing)
+        ("weather_temp", "cold"): {
+            "positive": (
+                "cold atmosphere, frost, crisp air, winter, cool tones, "
+                "blue ambient light, freezing, icy, sharp details"
+            ),
+            "negative": (
+                "summer, heat, warm colors, sun, flowers, green, tropical"
+            ),
+        },
+    }
+
+    # Sunny/bright weather (default for neutral weather_temp)
+    SUNNY_WEATHER_PROMPT = {
+        "positive": (
+            "bright sunny day, clear blue sky, harsh sunlight, lens flare, "
+            "hard shadows, vibrant colors, golden hour, sunbeams, high exposure, "
+            "summer vibe, crisp detail, glistening"
+        ),
+        "negative": (
+            "clouds, rain, fog, overcast, gloom, grey sky, wet ground, "
+            "low contrast, night, dark, depression"
+        ),
+    }
+
+    # Neutral weather (overcast/mild)
+    NEUTRAL_WEATHER_PROMPT = {
+        "positive": (
+            "overcast, soft lighting, diffused light, flat lighting, neutral colors, "
+            "cloudy sky, ambient occlusion, realistic, everyday atmosphere, "
+            "balanced exposure, photorealistic"
+        ),
+        "negative": (
+            "direct sunlight, hard shadows, high contrast, rain, snow, "
+            "sunset, sunrise, neon, extreme weather, overexposed, underexposed"
+        ),
     }
 
     @classmethod
     def generate_atmosphere_prompt(
         cls,
         signals: List[Tuple[str, str, float, float]],
-        max_descriptions: int = 3,
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         """
-        Generate atmospheric prompt from dominant signals.
+        Generate atmospheric prompts from weather signals.
 
-        Selects strongest signals by intensity and combines their
-        atmospheric descriptions into a cohesive prompt.
-
-        Args:
-            signals: List of (category, tag, intensity, score) tuples
-            max_descriptions: Maximum number of descriptions to combine
-
-        Returns:
-            str: Atmospheric prompt or None if no matching signals
-        """
-        # Collect atmosphere descriptions for strong signals
-        descriptions = []
-
-        for category, tag, intensity, score in signals:
-            if intensity > 0.3:  # Only strong signals
-                key = (category, tag)
-                if key in cls.ATMOSPHERE_DESCRIPTIONS:
-                    # Pick description based on intensity
-                    descriptions.append(
-                        (intensity, cls.ATMOSPHERE_DESCRIPTIONS[key])
-                    )
-
-        if not descriptions:
-            return None
-
-        # Sort by intensity and take top signals
-        descriptions.sort(key=lambda x: x[0], reverse=True)
-        descriptions = descriptions[:max_descriptions]
-
-        # Combine descriptions
-        selected = []
-        for intensity, desc_list in descriptions:
-            # Pick first description (could also randomize)
-            selected.append(desc_list[0])
-
-        # Create prompt
-        prompt = ", ".join(selected)
-        return prompt
-
-    @classmethod
-    def get_mood(
-        cls,
-        signals: List[Tuple[str, str, float, float]],
-    ) -> Optional[str]:
-        """
-        Determine overall mood from signal composition.
+        Analyzes weather_wet and weather_temp signals to determine the
+        dominant weather condition and returns appropriate positive/negative prompts.
 
         Args:
             signals: List of (category, tag, intensity, score) tuples
 
         Returns:
-            str: Mood descriptor (e.g., "festive", "chaotic", "peaceful")
+            Tuple[positive_prompt, negative_prompt]: Weather-specific prompts
+                                                     or (None, None) if no weather signals
         """
-        # Count positive/negative/neutral signals
-        positive = 0
-        negative = 0
-        intensity_total = 0
+        # Extract weather signals
+        weather_wet_signal = None
+        weather_temp_signal = None
+        max_wet_intensity = 0.0
+        max_temp_intensity = 0.0
 
         for category, tag, intensity, score in signals:
-            if intensity > 0.3:
-                intensity_total += intensity
-                if score > 0.5:
-                    positive += 1
-                elif score < -0.5:
-                    negative += 1
+            if category == "weather_wet" and intensity > max_wet_intensity:
+                weather_wet_signal = (category, tag, intensity)
+                max_wet_intensity = intensity
+            elif category == "weather_temp" and intensity > max_temp_intensity:
+                weather_temp_signal = (category, tag, intensity)
+                max_temp_intensity = intensity
 
-        if intensity_total == 0:
-            return "calm"
+        # Priority: weather_wet (rain/snow) overrides weather_temp
+        if weather_wet_signal and max_wet_intensity > 0.3:
+            category, tag, intensity = weather_wet_signal
+            key = (category, tag)
+            if key in cls.WEATHER_ATMOSPHERE_PROMPTS:
+                prompts = cls.WEATHER_ATMOSPHERE_PROMPTS[key]
+                return prompts["positive"], prompts["negative"]
 
-        # Determine mood based on composition
-        if negative > positive:
-            return "chaotic"
-        elif positive > negative:
-            return "festive"
-        else:
-            return "neutral"
+        # If no precipitation, check temperature
+        if weather_temp_signal and max_temp_intensity > 0.3:
+            category, tag, intensity = weather_temp_signal
+            key = (category, tag)
+            if key in cls.WEATHER_ATMOSPHERE_PROMPTS:
+                prompts = cls.WEATHER_ATMOSPHERE_PROMPTS[key]
+                return prompts["positive"], prompts["negative"]
+            # Default sunny for unrecognized temp tags
+            return cls.SUNNY_WEATHER_PROMPT["positive"], cls.SUNNY_WEATHER_PROMPT["negative"]
+
+        # No significant weather signals - use neutral
+        return cls.NEUTRAL_WEATHER_PROMPT["positive"], cls.NEUTRAL_WEATHER_PROMPT["negative"]
+
+
