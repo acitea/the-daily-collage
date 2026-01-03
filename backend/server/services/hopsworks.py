@@ -7,11 +7,12 @@ Handles:
 3. Artifact Store: Generated visualizations
 """
 
-import logging
-import hashlib
+import logging, hopsworks
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-import io
+from hopsworks.project import Project
+from hopsworks.core.dataset_api import DatasetApi
+from hsfs.feature_store import FeatureStore
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +44,13 @@ class HopsworksService:
         self.api_key = api_key
         self.project_name = project_name
         self.host = host
-        self._project = None
-        self._fs = None
-        self._mr = None
+        self._project: Project = None
+        self._fs: FeatureStore = None
+        self._dataset_api: DatasetApi = None
         
     def connect(self):
         """Establish connection to Hopsworks."""
         try:
-            import hopsworks
-            
             connection_args = {
                 "project": self.project_name,
                 "api_key_value": self.api_key,
@@ -67,7 +66,7 @@ class HopsworksService:
                     
             self._project = hopsworks.login(**connection_args)
             self._fs = self._project.get_feature_store()
-            self._mr = self._project.get_model_registry()
+            self._dataset_api = self._project.get_dataset_api()
             
             logger.info(f"Connected to Hopsworks project: {self.project_name}")
             

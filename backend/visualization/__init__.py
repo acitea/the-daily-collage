@@ -20,7 +20,6 @@ from .polish import (
     create_poller,
 )
 from .atmosphere import (
-    AtmosphereStrategy,
     AtmosphereDescriptor,
 )
 
@@ -28,6 +27,7 @@ __all__ = [
     "VisualizationService",
     "HybridComposer",
     "SignalIntensity",
+    "AtmosphereDescriptor",
     "AssetLibrary",
     "ZoneLayoutComposer",
     "Hitbox",

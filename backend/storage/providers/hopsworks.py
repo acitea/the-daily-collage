@@ -1,8 +1,8 @@
 """
-Hopsworks artifact storage backend.
+Hopsworks dataset storage backend.
 
 Delegates to HopsworksService for all Hopsworks operations.
-Stores images and metadata as artifacts in the same collection.
+Stores images and metadata in the Resources dataset under a specified directory.
 """
 
 import io
@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Optional
 
+from backend.server.services.hopsworks import HopsworksService
 from backend.storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
@@ -17,161 +18,170 @@ logger = logging.getLogger(__name__)
 
 class HopsworksStorageBackend(StorageBackend):
     """
-    Hopsworks artifact store backend.
+    Hopsworks dataset storage backend.
 
-    Stores images and metadata as artifacts in Hopsworks.
+    Stores images and metadata in Hopsworks Resources dataset.
     Delegates all Hopsworks operations to HopsworksService.
     """
 
-    def __init__(self, hopsworks_service, artifact_collection: str = "vibe_images"):
+    def __init__(self, hopsworks_service: HopsworksService, artifact_collection: str = "vibe_images"):
         """
         Initialize Hopsworks storage backend.
 
         Args:
-            hopsworks_service: Instance of HopsworksService for artifact operations
-            artifact_collection: Name of artifact collection to store in
+            hopsworks_service: Instance of HopsworksService for dataset operations
+            artifact_collection: Directory name in Resources dataset (e.g., "vibe_images")
         """
         self.hopsworks_service = hopsworks_service
         self.artifact_collection = artifact_collection
 
         # Ensure connection
-        if not self.hopsworks_service._project:
+        if not self.hopsworks_service._dataset_api:
             self.hopsworks_service.connect()
 
-        # Get artifact registry
+        # Get dataset API
         try:
-            import hopsworks
-            self.artifacts = self.hopsworks_service._project.get_artifacts_api()
-            logger.info(f"Initialized Hopsworks storage with collection: {artifact_collection}")
+            self.dataset_api = self.hopsworks_service._dataset_api
+            logger.info(f"Initialized Hopsworks storage with dataset directory: Resources/{artifact_collection}")
         except Exception as e:
-            logger.error(f"Failed to get artifacts API: {e}")
-            self.artifacts = None
+            logger.error(f"Failed to get dataset API: {e}")
+            self.dataset_api = None
 
     def _is_connected(self) -> bool:
         """Check if connected to Hopsworks."""
-        return self.artifacts is not None
+        return self.dataset_api is not None
 
     def get_image(self, cache_key: str) -> Optional[bytes]:
-        """Retrieve image from Hopsworks artifact registry."""
+        """Retrieve image from Hopsworks dataset."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks")
             return None
 
         try:
-            # Download artifact
-            artifact_name = f"{cache_key}.png"
-            artifact_path = self.artifacts.download(
-                name=artifact_name,
-                collection=self.artifact_collection,
-            )
-
-            # Read downloaded file
-            if artifact_path:
-                with open(artifact_path, "rb") as f:
+            import tempfile
+            import os
+            
+            # Create temporary directory for download
+            with tempfile.TemporaryDirectory() as tmpdir:
+                filename = f"{cache_key}.png"
+                dataset_path = f"Resources/{self.artifact_collection}/{filename}"
+                local_path = os.path.join(tmpdir, filename)
+                
+                # Download from dataset
+                self.dataset_api.download(dataset_path, local_path)
+                
+                # Read file
+                with open(local_path, "rb") as f:
                     image_data = f.read()
-                logger.debug(f"Retrieved image from Hopsworks: {cache_key}")
+                
+                logger.debug(f"Retrieved image from Hopsworks dataset: {cache_key}")
                 return image_data
 
-            return None
-
         except Exception as e:
-            logger.debug(f"Failed to retrieve artifact {cache_key}: {e}")
+            logger.debug(f"Failed to retrieve image {cache_key}: {e}")
             return None
 
     def put_image(self, cache_key: str, image_data: bytes) -> str:
-        """Store image in Hopsworks artifact registry."""
+        """Store image in Hopsworks dataset."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks, cannot store image")
             return ""
 
         try:
-            # Create in-memory file
-            image_file = io.BytesIO(image_data)
-            image_file.name = f"{cache_key}.png"
-
-            # Upload to Hopsworks artifact registry
-            self.artifacts.upload(
-                artifact=image_file,
-                name=f"{cache_key}.png",
-                collection=self.artifact_collection,
-                description=f"Vibe visualization for {cache_key}",
-            )
-
-            logger.info(f"Stored image in Hopsworks: {cache_key}")
-            return f"hopsworks://{self.artifact_collection}/{cache_key}.png"
+            import tempfile
+            import os
+            
+            # Create temporary directory and write file
+            with tempfile.TemporaryDirectory() as tmpdir:
+                filename = f"{cache_key}.png"
+                local_path = os.path.join(tmpdir, filename)
+                
+                # Write image data to file
+                with open(local_path, "wb") as f:
+                    f.write(image_data)
+                
+                # Upload to Hopsworks dataset
+                upload_path = f"Resources/{self.artifact_collection}"
+                self.dataset_api.upload(local_path, upload_path, overwrite=True)
+                
+                logger.info(f"Stored image in Hopsworks dataset: {cache_key}")
+                return f"hopsworks://Resources/{self.artifact_collection}/{filename}"
 
         except Exception as e:
             logger.error(f"Failed to store image in Hopsworks: {e}")
             return ""
 
     def get_metadata(self, cache_key: str) -> Optional[CacheMetadata]:
-        """Retrieve metadata from Hopsworks artifact registry."""
+        """Retrieve metadata from Hopsworks dataset."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks")
             return None
 
         try:
-            # Download metadata artifact
-            metadata_name = f"{cache_key}_metadata.json"
-            metadata_path = self.artifacts.download(
-                name=metadata_name,
-                collection=self.artifact_collection,
-            )
-
-            if metadata_path:
-                with open(metadata_path, "r") as f:
+            import tempfile
+            import os
+            
+            # Create temporary directory for download
+            with tempfile.TemporaryDirectory() as tmpdir:
+                filename = f"{cache_key}_metadata.json"
+                dataset_path = f"Resources/{self.artifact_collection}/{filename}"
+                local_path = os.path.join(tmpdir, filename)
+                
+                # Download from dataset
+                self.dataset_api.download(dataset_path, local_path)
+                
+                # Read file
+                with open(local_path, "r") as f:
                     metadata_dict = json.load(f)
-                logger.debug(f"Retrieved metadata from Hopsworks: {cache_key}")
+                
+                logger.debug(f"Retrieved metadata from Hopsworks dataset: {cache_key}")
                 return CacheMetadata.from_dict(metadata_dict)
-
-            return None
 
         except Exception as e:
             logger.debug(f"Failed to retrieve metadata {cache_key}: {e}")
             return None
 
     def put_metadata(self, metadata: CacheMetadata) -> None:
-        """Store metadata in Hopsworks artifact registry as JSON."""
+        """Store metadata in Hopsworks dataset as JSON."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks, cannot store metadata")
             return
 
         try:
-            # Serialize metadata to JSON
-            metadata_json = json.dumps(metadata.to_dict(), indent=2)
-            metadata_file = io.BytesIO(metadata_json.encode())
-            metadata_file.name = f"{metadata.cache_key}_metadata.json"
-
-            # Upload to Hopsworks artifact registry
-            self.artifacts.upload(
-                artifact=metadata_file,
-                name=f"{metadata.cache_key}_metadata.json",
-                collection=self.artifact_collection,
-                description=f"Metadata for vibe visualization {metadata.cache_key}",
-            )
-
-            logger.info(f"Stored metadata in Hopsworks: {metadata.cache_key}")
+            import tempfile
+            import os
+            
+            # Create temporary directory and write file
+            with tempfile.TemporaryDirectory() as tmpdir:
+                filename = f"{metadata.cache_key}_metadata.json"
+                local_path = os.path.join(tmpdir, filename)
+                
+                # Write metadata to file
+                with open(local_path, "w") as f:
+                    json.dump(metadata.to_dict(), f, indent=2)
+                
+                # Upload to Hopsworks dataset
+                upload_path = f"Resources/{self.artifact_collection}"
+                self.dataset_api.upload(local_path, upload_path, overwrite=True)
+                
+                logger.info(f"Stored metadata in Hopsworks dataset: {metadata.cache_key}")
 
         except Exception as e:
             logger.error(f"Failed to store metadata in Hopsworks: {e}")
 
     def exists(self, cache_key: str) -> bool:
-        """Check if image exists in Hopsworks artifact registry."""
+        """Check if image exists in Hopsworks dataset."""
         if not self._is_connected():
             return False
 
         try:
-            # Try to list artifacts with this name
-            artifact_name = f"{cache_key}.png"
-            artifacts = self.artifacts.list(collection=self.artifact_collection)
-
-            # Check if our artifact exists in the list
-            for artifact in artifacts:
-                if artifact.name == artifact_name:
-                    return True
-
-            return False
+            # Try to list files in the dataset directory
+            dataset_path = f"Resources/{self.artifact_collection}"
+            filename = f"{cache_key}.png"
+            
+            # List directory contents
+            return self.dataset_api.exists(f"{dataset_path}/{filename}")
 
         except Exception as e:
-            logger.debug(f"Failed to check artifact existence {cache_key}: {e}")
+            logger.debug(f"Failed to check file existence {cache_key}: {e}")
             return False
