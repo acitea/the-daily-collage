@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from backend.visualization.caching.core import CacheMetadata, StorageBackend
+from backend.storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
 

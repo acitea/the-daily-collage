@@ -11,7 +11,7 @@ import pytest
 from datetime import datetime
 from typing import Dict
 
-from backend.visualization.caching import (
+from backend.storage import (
     VibeHash,
     VibeCache,
     CacheMetadata,

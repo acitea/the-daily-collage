@@ -274,9 +274,7 @@ async def check_cache_status(
 
         cached = viz_service.cache.exists(city, timestamp)
 
-        from backend.visualization.caching import VibeHash
-
-        vibe_hash = VibeHash.generate(city, timestamp)
+        from backend.storage import VibeHash
 
         return CacheStatusResponse(
             vibe_hash=vibe_hash,

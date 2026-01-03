@@ -18,7 +18,7 @@ import io
 from backend.settings import settings, AtmosphereStrategy
 from backend.visualization.assets import ZoneLayoutComposer
 from backend.visualization.polish import create_poller
-from backend.visualization.caching import VibeCache, create_storage_backend
+from backend.storage import VibeCache, create_storage_backend
 from backend.visualization.atmosphere import AtmosphereDescriptor
 
 logger = logging.getLogger(__name__)

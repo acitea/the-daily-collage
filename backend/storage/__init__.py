@@ -1,5 +1,5 @@
 """
-Caching system for The Daily Collage visualizations.
+Caching and storage system for The Daily Collage.
 
 Provides:
 - VibeCache: High-level cache interface
@@ -9,10 +9,10 @@ Provides:
 - CacheMetadata: Metadata about cached visualizations
 """
 
-from backend.visualization.caching.cache import VibeCache
-from backend.visualization.caching.core import CacheMetadata, StorageBackend, VibeHash
-from backend.visualization.caching.factory import create_storage_backend
-from backend.visualization.caching.storage import (
+from backend.storage.cache import VibeCache
+from backend.storage.core import CacheMetadata, StorageBackend, VibeHash
+from backend.storage.factory import create_storage_backend
+from backend.storage.providers import (
     HopsworksStorageBackend,
     LocalStorageBackend,
     MockS3StorageBackend,

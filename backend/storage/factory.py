@@ -5,8 +5,8 @@ Factory for creating storage backends based on configuration.
 import logging
 from typing import Optional
 
-from backend.visualization.caching.core import StorageBackend
-from backend.visualization.caching.storage import (
+from backend.storage.core import StorageBackend
+from backend.storage.providers import (
     HopsworksStorageBackend,
     LocalStorageBackend,
     MockS3StorageBackend,

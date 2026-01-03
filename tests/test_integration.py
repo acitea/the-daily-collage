@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict
 
 from backend.visualization.composition import HybridComposer, VisualizationService
-from backend.visualization.caching import VibeCache, LocalStorageBackend
+from backend.storage import VibeCache, LocalStorageBackend
 from backend.settings import settings
 
 

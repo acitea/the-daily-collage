@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Optional
 
-from backend.visualization.caching.core import CacheMetadata, StorageBackend
+from backend.storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
 

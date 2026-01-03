@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.visualization.composition import HybridComposer, VisualizationService
-from backend.visualization.caching import VibeHash, VibeCache, LocalStorageBackend
+from backend.storage import VibeHash, VibeCache, LocalStorageBackend
 from backend.settings import settings
 
 
