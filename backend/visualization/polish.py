@@ -81,14 +81,21 @@ class StabilityAIPoller:
 
             # Build prompts
             if not prompt:
-                prompt = "a colorful, artistic, cartoonish illustration of a city scene"
+                prompt = (
+                    "a colorful sticker scrapbook collage, playful cartoon stickers, "
+                    "overlapping elements, vibrant colors, whimsical illustration style, "
+                    "artistic arrangement, scrapbook aesthetic"
+                )
 
             # Incorporate atmosphere prompt if provided
             if atmosphere_prompt:
                 prompt = f"{prompt}, {atmosphere_prompt}"
 
             if not negative_prompt:
-                negative_prompt = "blurry, low quality, distorted"
+                negative_prompt = (
+                    "blurry, low quality, distorted, photorealistic, realistic, "
+                    "moved objects, 3d render, photograph"
+                )
 
             # Prepare request
             url = f"{self.api_host}/v1/generation/{self.engine_id}/image-to-image"

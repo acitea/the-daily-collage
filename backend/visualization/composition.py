@@ -145,8 +145,15 @@ class HybridComposer:
 
         polished_data = self.poller.polish(
             layout_data,
-            prompt=f"A colorful, artistic, cartoonish illustration of {location}, news visualization",
-            negative_prompt="blurry, low quality, distorted, moved objects",
+            prompt=(
+                "A colorful sticker scrapbook collage representing news from "
+                f"{location}, playful cartoon stickers, overlapping elements, "
+                "vibrant colors, whimsical illustration style"
+            ),
+            negative_prompt=(
+                "blurry, low quality, distorted, moved objects, photorealistic, "
+                "realistic, 3d render, photograph"
+            ),
             atmosphere_prompt=atmosphere_prompt,
         )
 
