@@ -35,8 +35,8 @@ logger.info(f"Using device: {DEVICE}")
 # Model config
 BASE_MODEL = "KB/bert-base-swedish-cased"
 MAX_LENGTH = 512
-BATCH_SIZE = 32 if torch.cuda.is_available() else 8
-NUM_EPOCHS = 3
+BATCH_SIZE = 32 if torch.cuda.is_available() else 12
+NUM_EPOCHS = 8
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 

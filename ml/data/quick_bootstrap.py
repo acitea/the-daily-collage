@@ -11,18 +11,30 @@ from datetime import datetime, timedelta
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml.ingestion.script import fetch_news
+from ml.ingestion.script import fetch_news, fetch_news_batched
 from ml.ingestion.hopsworks_pipeline import classify_article, SIGNAL_CATEGORIES
 
 def quick_bootstrap(
     countries: list = ["sweden"],
     articles_per_country: int = 500,
-    output_dir: str = "ml/data"
+    output_dir: str = "ml/data",
+    use_batching: bool = True,
+    batch_size: int = 250,
+    days_lookback: int = 360,
 ):
     """
-    Bootstrap 500-1000 labeled articles in ~10 minutes.
+    Bootstrap 500+ labeled articles using batched GDELT fetching.
+    Uses multiple requests to overcome the 250-article-per-request GDELT limit.
+    
+    Args:
+        countries: List of countries to fetch from (default: ["sweden"])
+        articles_per_country: Target articles per country (e.g., 500)
+        output_dir: Output directory for parquet files
+        use_batching: If True, use fetch_news_batched to get more articles
+        batch_size: Articles per GDELT request (max 250)
+        days_lookback: Days to look back for articles (spreads requests across this range)
     """
-    print("🚀 Starting quick bootstrap...")
+    print("🚀 Starting quick bootstrap with batched fetching...")
     
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -30,13 +42,25 @@ def quick_bootstrap(
     all_articles = []
     
     for country in countries:
-        # GDELT API has a 250 article limit per request
-        articles_to_fetch = min(articles_per_country, 250)
-        print(f"\n📰 Fetching {articles_to_fetch} articles from {country}...")
+        print(f"\n📰 Fetching {articles_per_country} articles from {country}...")
         try:
-            df = fetch_news(country=country, max_articles=articles_to_fetch)
+            if use_batching:
+                # Use batched fetching to overcome 250-article limit
+                df = fetch_news_batched(
+                    country=country,
+                    total_articles=articles_per_country,
+                    batch_size=batch_size,
+                    days_lookback=days_lookback,
+                    batch_delay=0.5  # 500ms delay between requests
+                )
+            else:
+                # Fallback to single request (max 250 articles)
+                articles_to_fetch = min(articles_per_country, 250)
+                df = fetch_news(country=country, max_articles=articles_to_fetch)
         except Exception as e:
             print(f"⚠️  Error fetching {country}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
 
         if df.is_empty():

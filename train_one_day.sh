@@ -28,20 +28,40 @@ fi
 echo "   ✅ All dependencies installed"
 
 # Step 2: Bootstrap data
+echo ""
+echo "📰 Step 2: Bootstrapping training data (500 articles via batched GDELT)..."
+python3 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+from ml.data.quick_bootstrap import quick_bootstrap
+print('  Fetching 6250 articles from Sweden (25 x 250-article batches with delays)...')
+quick_bootstrap(
+    countries=['sweden'],
+    articles_per_country=6250,
+    use_batching=True,
+    batch_size=250,
+    days_lookback=180
+)
+" || {
+  echo "❌ Data bootstrap failed"
+  exit 1
+}
+echo "   ✅ 6250 articles collected and classified"
 echo "
-📰 Step 2: Collecting and labeling ~250 articles from Sweden (~2 min)..."
+📰 Step 2: Collecting and labeling ~6250 articles from Sweden (~2 min)..."
 python3 ml/data/quick_bootstrap.py \
-    --articles-per-country 250 \
+    --articles-per-country 6250 \
     --output-dir ml/data
 
 # Step 3: Train
 echo "
-🚀 Step 3: Training fine-tuned BERT model (3 epochs, ~5-20 min on GPU/CPU)..."
+🚀 Step 3: Training fine-tuned BERT model (8 epochs, ~5-20 min on GPU/CPU)..."
 python3 ml/models/quick_finetune.py \
     --train ml/data/train_bootstrap.parquet \
     --val ml/data/val_bootstrap.parquet \
     --output ml/models/checkpoints \
-    --epochs 3
+    --epochs 8
 
 # Step 4: Verify model
 echo "
