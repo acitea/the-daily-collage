@@ -23,7 +23,7 @@ class TestHybridComposerPipeline:
         composer = HybridComposer()
 
         vibe_vector = {
-            "traffic": 0.45,
+            "transportation": 0.45,
             "weather_temp": -0.2,
             "weather_wet": 0.3,
         }
@@ -59,7 +59,7 @@ class TestHybridComposerPipeline:
         composer = HybridComposer()
 
         vibe_vector = {
-            "traffic": 1.0,  # Maximum
+            "transportation": 1.0,  # Maximum
             "crime": -1.0,   # Minimum
             "festivals": 0.0,  # Neutral
         }
@@ -88,7 +88,7 @@ class TestVisualizationServiceIntegration:
         service = VisualizationService()
 
         vibe_vector = {
-            "traffic": 0.45,
+            "transportation": 0.45,
             "weather_wet": 0.3,
         }
 
@@ -100,17 +100,15 @@ class TestVisualizationServiceIntegration:
         assert image_data is not None
         assert len(image_data) > 0
         assert not metadata["cached"], "First call should not be cached"
-        assert metadata["vibe_hash"] is not None
-        assert metadata["image_url"] is not None
+        assert metadata["cache_key"] is not None
         assert "hitboxes" in metadata
-        assert metadata["vibe_vector"] == vibe_vector
 
     def test_generate_or_get_cache_hit(self):
         """Should hit cache on second call with same vibe."""
         service = VisualizationService()
 
         vibe_vector = {
-            "traffic": 0.45,
+            "transportation": 0.45,
             "weather_wet": 0.3,
         }
 

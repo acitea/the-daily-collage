@@ -5,9 +5,9 @@ CLI utility to generate layout + hitbox JSON for a given vibe vector.
 Useful for frontend development to preview layouts before integration.
 
 Usage:
-    python backend/utils/generate_layout.py --city stockholm --vibe '{"traffic": 0.5, "weather": 0.3}'
+    python backend/utils/generate_layout.py --city stockholm --vibe '{"transportation": 0.5, "weather_temp": 0.3}'
     python backend/utils/generate_layout.py --city stockholm --config sample_vibe.json
-    python backend/utils/generate_layout.py --sample
+    python backend/utils/generate_layout.py --sample calm
 """
 
 import sys
@@ -28,7 +28,7 @@ def generate_sample_vibes() -> dict:
     """Generate sample vibe vectors for different scenarios."""
     return {
         "calm": {
-            "traffic": 0.1,
+            "transportation": 0.1,
             "weather_temp": 0.0,
             "weather_wet": 0.0,
             "crime": 0.0,
@@ -39,7 +39,7 @@ def generate_sample_vibes() -> dict:
             "politics": 0.0,
         },
         "active": {
-            "traffic": 0.7,
+            "transportation": 0.7,
             "weather_temp": 0.2,
             "weather_wet": -0.3,
             "crime": 0.1,
@@ -50,7 +50,7 @@ def generate_sample_vibes() -> dict:
             "politics": 0.2,
         },
         "crisis": {
-            "traffic": 0.8,
+            "transportation": 0.8,
             "weather_temp": 0.9,
             "weather_wet": 0.7,
             "crime": 0.6,
@@ -61,7 +61,7 @@ def generate_sample_vibes() -> dict:
             "politics": 0.5,
         },
         "peaceful": {
-            "traffic": 0.2,
+            "transportation": 0.2,
             "weather_temp": 0.3,
             "weather_wet": -0.2,
             "crime": -0.8,

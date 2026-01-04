@@ -16,7 +16,7 @@ from PIL import Image
 import io
 
 from backend.settings import settings
-from backend.visualization.assets import ZoneLayoutComposer
+from backend.visualization.assets import AssetLibrary, ZoneLayoutComposer
 from backend.visualization.polish import create_poller
 from backend.storage import VibeCache, create_storage_backend
 from backend.visualization.atmosphere import AtmosphereDescriptor
@@ -77,8 +77,9 @@ class HybridComposer:
         ambience without overlaying assets that could obscure core elements.
 
         Args:
-            vibe_vector: Dict mapping signal categories to scores (-1.0 to 1.0)
-                        e.g., {'traffic': 0.45, 'weather': -0.3, ...}
+            vibe_vector: Dict mapping signal categories to scores
+                        e.g., {'transportation': 0.45, 'crime': -0.3, ...}
+                        Score range: -1.0 to 1.0
             location: Geographic location for context
 
         Returns:
@@ -90,8 +91,8 @@ class HybridComposer:
 
         # Step 1: Layout - place assets and track hitboxes
         signals = [
-            (category, tag, intensity, intensity)  # category, tag, intensity, score
-            for category, (tag, intensity) in self._expand_vibe_vector(vibe_vector).items()
+            (category, tag, intensity, score)  # category, tag, intensity, score
+            for category, (tag, intensity, score) in self._expand_vibe_vector(vibe_vector).items()
         ]
 
         # Layout without atmosphere assets (prompt-only strategy)
@@ -152,29 +153,38 @@ class HybridComposer:
     ) -> Dict[str, Tuple[str, float]]:
         """
         Expand vibe vector to (tag, intensity) tuples by category.
+        
+        Derives tags as "positive" or "negative" based on score sign.
+        Intensity is the absolute value of the score.
+        Filters out insignificant signals with |score| < 0.1.
+        
+        Asset filenames follow pattern: <category>_<tag>_<level>.png
+        where level is "low", "med", or "high" based on intensity.
 
         Args:
-            vibe_vector: Score dict
+            vibe_vector: Dict mapping category to score
+                        e.g., {'transportation': 0.75, 'crime': -0.45}
+                        Score range: -1.0 to 1.0
 
         Returns:
             Dict mapping category to (tag, intensity) tuples
+            Tag is "positive" or "negative"
+            Intensity is absolute value in range [0.0, 1.0]
         """
         result = {}
         for category, score in vibe_vector.items():
-            # Intensity is absolute value (0-1)
+            # Intensity is absolute value of score (0-1)
             intensity = abs(score)
-
-            # Tag based on sign and magnitude
-            if score > 0.5:
-                tag = "high"
-            elif score > 0:
-                tag = "moderate"
-            elif score < -0.5:
-                tag = "severe"
-            else:
-                tag = "low"
-
-            result[category] = (tag, intensity)
+            
+            # Filter out insignificant signals
+            if intensity < 0.1:
+                continue
+            
+            # Tag is simply positive or negative based on score sign
+            tag = "positive" if score >= 0 else "negative"
+            intensity_level = AssetLibrary.get_intensity_level(intensity)
+            
+            result[category] = (tag, intensity_level, score)
 
         return result
 
@@ -225,7 +235,9 @@ class VisualizationService:
 
         Args:
             city: Geographic location
-            vibe_vector: Dict of signal scores (-1.0 to 1.0)
+            vibe_vector: Dict mapping categories to scores
+                        e.g., {'transportation': 0.45, 'crime': -0.3}
+                        Score range: -1.0 to 1.0
             timestamp: Time window (defaults to now)
             force_regenerate: Skip cache and regenerate
             source_articles: Articles that contributed to vibe

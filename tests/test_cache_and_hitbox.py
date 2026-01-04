@@ -94,12 +94,12 @@ class TestCacheDeterminism:
 
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        vibe_vector = {"traffic": 0.45}
+        vibe_vector = {"transportation": 0.45}
         image_data = b"fake_image_data"
         hitboxes = [{"x": 100, "y": 150, "w": 50, "h": 50}]
 
         # Store
-        url1, meta1 = cache.set(city, timestamp, image_data, hitboxes, vibe_vector)
+        cache_key, meta1 = cache.set(city, timestamp, image_data, hitboxes, vibe_vector)
 
         # Retrieve same
         img2, meta2 = cache.get(city, timestamp)
@@ -114,7 +114,7 @@ class TestCacheDeterminism:
 
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        v1 = {"traffic": 0.45}
+        v1 = {"transportation": 0.45}
         image_data = b"fake_image"
         hitboxes = []
 
@@ -134,7 +134,7 @@ class TestCacheDeterminism:
 
         city = "stockholm"
         timestamp = datetime(2025, 12, 11, 3, 30, 0)
-        vibe_vector = {"traffic": 0.45}
+        vibe_vector = {"transportation": 0.45}
 
         assert not cache.exists(city, timestamp), "Should not exist initially"
 
@@ -280,43 +280,37 @@ class TestCacheMetadata:
     def test_metadata_serialization(self):
         """Metadata should serialize and deserialize correctly."""
         meta = CacheMetadata(
-            vibe_hash="test_hash",
+            cache_key="test_hash",
             city="stockholm",
             timestamp=datetime(2025, 12, 11, 3, 30, 0),
-            vibe_vector={"traffic": 0.45},
-            image_url="s3://bucket/image.png",
             hitboxes=[{"x": 10, "y": 20, "width": 100, "height": 100}],
-            source_articles=[{"title": "Test", "url": "http://example.com"}],
         )
 
         data = meta.to_dict()
-        assert data["vibe_hash"] == "test_hash"
+        assert data["cache_key"] == "test_hash"
         assert data["city"] == "stockholm"
         assert len(data["hitboxes"]) == 1
 
         # Deserialize
         meta2 = CacheMetadata.from_dict(data)
-        assert meta2.vibe_hash == "test_hash"
+        assert meta2.cache_key == "test_hash"
         assert meta2.city == "stockholm"
 
-    def test_metadata_stores_source_articles(self):
-        """Metadata should preserve source article information."""
-        articles = [
-            {"title": "Article 1", "url": "http://example.com/1"},
-            {"title": "Article 2", "url": "http://example.com/2"},
+    def test_metadata_stores_hitboxes(self):
+        """Metadata should preserve hitbox information."""
+        hitboxes = [
+            {"x": 10, "y": 20, "width": 100, "height": 100, "signal_category": "transportation"},
+            {"x": 200, "y": 300, "width": 50, "height": 75, "signal_category": "crime"},
         ]
 
         meta = CacheMetadata(
-            vibe_hash="test",
+            cache_key="test",
             city="stockholm",
             timestamp=datetime.utcnow(),
-            vibe_vector={},
-            image_url="url",
-            hitboxes=[],
-            source_articles=articles,
+            hitboxes=hitboxes,
         )
 
-        assert meta.source_articles == articles
+        assert meta.hitboxes == hitboxes
 
 
 if __name__ == "__main__":
