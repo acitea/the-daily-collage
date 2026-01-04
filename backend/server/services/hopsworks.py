@@ -14,6 +14,8 @@ from hopsworks.project import Project
 from hopsworks.core.dataset_api import DatasetApi
 from hsfs.feature_store import FeatureStore
 
+from backend.types import SignalCategory
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +28,9 @@ class HopsworksService:
     - Store/retrieve generated images in artifact registry
     - Query historical vibes for comparison
     """
+    
+    # Signal categories from centralized enum
+    SIGNAL_CATEGORIES = [cat.value for cat in SignalCategory]
     
     def __init__(
         self,
@@ -242,10 +247,7 @@ class HopsworksService:
             
             # Add classifications
             classifications = headline.get("classifications", {})
-            for category in [
-                "emergencies", "crime", "festivals", "transportation",
-                "weather_temp", "weather_wet", "sports", "economics", "politics"
-            ]:
+            for category in self.SIGNAL_CATEGORIES:
                 if category in classifications:
                     score, tag = classifications[category]
                     row[f"{category}_score"] = score
@@ -296,10 +298,7 @@ class HopsworksService:
         }
         
         # Add each category's score, tag, and count
-        for category in [
-            "emergencies", "crime", "festivals", "transportation",
-            "weather_temp", "weather_wet", "sports", "economics", "politics"
-        ]:
+        for category in self.SIGNAL_CATEGORIES:
             if category in vibe_vector:
                 score, tag, count = vibe_vector[category]
                 row[f"{category}_score"] = score
@@ -353,10 +352,7 @@ class HopsworksService:
             
             # Reconstruct vibe vector
             vibe_vector = {}
-            for category in [
-                "emergencies", "crime", "festivals", "transportation",
-                "weather_temp", "weather_wet", "sports", "economics", "politics"
-            ]:
+            for category in self.SIGNAL_CATEGORIES:
                 score = row[f"{category}_score"]
                 tag = row[f"{category}_tag"]
                 count = row.get(f"{category}_count", 0)
@@ -408,10 +404,7 @@ class HopsworksService:
             
             # Reconstruct vibe vector
             vibe_vector = {}
-            for category in [
-                "emergencies", "crime", "festivals", "transportation",
-                "weather_temp", "weather_wet", "sports", "economics", "politics"
-            ]:
+            for category in self.SIGNAL_CATEGORIES:
                 score = row[f"{category}_score"]
                 tag = row[f"{category}_tag"]
                 count = row.get(f"{category}_count", 0)
@@ -570,10 +563,6 @@ class HopsworksService:
             
             # Convert to list of dicts with structured classifications
             headlines = []
-            categories = [
-                "emergencies", "crime", "festivals", "transportation",
-                "weather_temp", "weather_wet", "sports", "economics", "politics"
-            ]
             
             for _, row in df.iterrows():
                 headline = {
@@ -585,7 +574,7 @@ class HopsworksService:
                 }
                 
                 # Add category scores and tags
-                for category in categories:
+                for category in self.SIGNAL_CATEGORIES:
                     score = row.get(f"{category}_score", 0.0)
                     tag = row.get(f"{category}_tag", "")
                     if score != 0.0 or tag:  # Only include if there's data

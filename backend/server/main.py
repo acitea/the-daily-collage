@@ -13,7 +13,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse, Response, FileResponse
-from pydantic import BaseModel
 
 # Ensure project root is on the Python path for absolute imports
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -46,51 +45,15 @@ try:
     from backend.server.services.hopsworks import create_hopsworks_service
     from backend.server.services.backfill import trigger_backfill_ingestion
     from backend.settings import settings
+    from backend.types import (
+        Hitbox,  # Use Hitbox directly (HitboxData removed)
+        VibeVectorRequest,
+        VisualizationResponse,
+        CacheStatusResponse,
+        SignalCategory,
+    )
 except ImportError as e:
     logger.error(f"Import error: {e}")
-
-
-# Pydantic models for API requests/responses
-class HitboxData(BaseModel):
-    """Hitbox metadata for interactive elements."""
-
-    x: int
-    y: int
-    width: int
-    height: int
-    signal_category: str
-    signal_tag: str
-    signal_intensity: float
-    signal_score: float
-
-
-class VibeVectorRequest(BaseModel):
-    """Request body for explicit vibe vector visualization."""
-
-    city: str
-    vibe_vector: Dict[str, float]  # category -> score (-1.0 to 1.0)
-    timestamp: Optional[str] = None  # ISO format datetime
-    source_articles: Optional[List[Dict]] = None  # Optional article metadata
-
-
-class VisualizationResponse(BaseModel):
-    """Response for visualization request."""
-
-    city: str
-    cache_key: str
-    image_url: str
-    hitboxes: List[HitboxData]
-    vibe_vector: Dict[str, float]
-    cached: bool
-    generated_at: str
-
-
-class CacheStatusResponse(BaseModel):
-    """Response for cache status."""
-
-    cache_key: str
-    cached: bool
-    timestamp: str
 
 
 # Global services
@@ -208,7 +171,10 @@ async def create_visualization(
         )
 
         # Build response with hitbox objects
-        hitboxes = [HitboxData(**hb) for hb in metadata.get("hitboxes", [])]
+        # Hitbox is now a Pydantic model, can be used directly or reconstructed
+        hitboxes = metadata.get("hitboxes", [])
+        if hitboxes and not isinstance(hitboxes[0], Hitbox):
+            hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
 
         return VisualizationResponse(
             city=request.city,
@@ -302,7 +268,9 @@ async def get_vibe(
             
             if metadata and image_data:
                 logger.info(f"Cache hit for {cache_key}")
-                hitboxes = [HitboxData(**hb) for hb in metadata.hitboxes]
+                hitboxes = metadata.hitboxes
+                if hitboxes and not isinstance(hitboxes[0], Hitbox):
+                    hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
                 
                 # Retrieve vibe_vector from Hopsworks (not stored in metadata)
                 vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
@@ -410,7 +378,9 @@ async def get_vibe(
         )
         
         # Build response with hitbox objects
-        hitboxes = [HitboxData(**hb) for hb in metadata.get("hitboxes", [])]
+        hitboxes = metadata.get("hitboxes", [])
+        if hitboxes and not isinstance(hitboxes[0], Hitbox):
+            hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
         
         # Construct image URL from cache_key
         image_url = f"/api/visualization/{metadata['cache_key']}/image"
@@ -748,52 +718,53 @@ async def get_supported_locations():
 @app.get("/api/signal-categories", tags=["Metadata"])
 async def get_signal_categories():
     """Get list of all signal categories used for classification."""
-    categories = [
-        {
-            "id": "transportation",
+    # Use centralized enum to ensure consistency
+    category_metadata = {
+        SignalCategory.TRANSPORTATION: {
             "name": "Transportation",
             "description": "Traffic, congestion, accidents",
         },
-        {
-            "id": "weather_temp",
+        SignalCategory.WEATHER_TEMP: {
             "name": "Weather - Temperature",
             "description": "Hot, cold, extreme temperatures",
         },
-        {
-            "id": "weather_wet",
+        SignalCategory.WEATHER_WET: {
             "name": "Weather - Precipitation",
             "description": "Rain, snow, flooding",
         },
-        {
-            "id": "crime",
+        SignalCategory.CRIME: {
             "name": "Crime & Safety",
             "description": "Theft, assault, police activity",
         },
-        {
-            "id": "festivals",
+        SignalCategory.FESTIVALS: {
             "name": "Festivals & Events",
             "description": "Concerts, celebrations, gatherings",
         },
-        {
-            "id": "sports",
+        SignalCategory.SPORTS: {
             "name": "Sports",
             "description": "Games, victories, sporting events",
         },
-        {
-            "id": "emergencies",
+        SignalCategory.EMERGENCIES: {
             "name": "Emergencies",
             "description": "Fires, earthquakes, evacuations",
         },
-        {
-            "id": "economics",
+        SignalCategory.ECONOMICS: {
             "name": "Economics",
             "description": "Market news, business developments",
         },
-        {
-            "id": "politics",
+        SignalCategory.POLITICS: {
             "name": "Politics",
             "description": "Elections, protests, government",
         },
+    }
+    
+    categories = [
+        {
+            "id": category.value,
+            "name": metadata["name"],
+            "description": metadata["description"],
+        }
+        for category, metadata in category_metadata.items()
     ]
     return JSONResponse(content={"categories": categories})
 

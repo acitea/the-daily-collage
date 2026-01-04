@@ -16,6 +16,7 @@ from PIL import Image
 import io
 
 from backend.settings import settings
+from backend.types import Signal, SignalCategory, SignalTag
 from backend.visualization.assets import AssetLibrary, ZoneLayoutComposer
 from backend.visualization.polish import create_poller
 from backend.storage import VibeCache, create_storage_backend
@@ -90,9 +91,10 @@ class HybridComposer:
         )
 
         # Step 1: Layout - place assets and track hitboxes
+        expanded = self._expand_vibe_vector(vibe_vector)
         signals = [
-            (category, tag, intensity, score)  # category, tag, intensity, score
-            for category, (tag, intensity, score) in self._expand_vibe_vector(vibe_vector).items()
+            Signal(category=category, tag=tag, score=score)
+            for category, (tag, score) in expanded.items()
         ]
 
         # Layout without atmosphere assets (prompt-only strategy)
@@ -150,29 +152,24 @@ class HybridComposer:
     @staticmethod
     def _expand_vibe_vector(
         vibe_vector: Dict[str, float],
-    ) -> Dict[str, Tuple[str, float]]:
+    ) -> Dict[SignalCategory, Tuple[SignalTag, float]]:
         """
-        Expand vibe vector to (tag, intensity) tuples by category.
+        Expand vibe vector to (tag, score) tuples by category.
         
-        Derives tags as "positive" or "negative" based on score sign.
-        Intensity is the absolute value of the score.
+        Derives tags as POSITIVE or NEGATIVE based on score sign.
         Filters out insignificant signals with |score| < 0.1.
-        
-        Asset filenames follow pattern: <category>_<tag>_<level>.png
-        where level is "low", "med", or "high" based on intensity.
 
         Args:
-            vibe_vector: Dict mapping category to score
+            vibe_vector: Dict mapping category string to score
                         e.g., {'transportation': 0.75, 'crime': -0.45}
                         Score range: -1.0 to 1.0
 
         Returns:
-            Dict mapping category to (tag, intensity) tuples
-            Tag is "positive" or "negative"
-            Intensity is absolute value in range [0.0, 1.0]
+            Dict mapping SignalCategory enum to (SignalTag, score) tuples
+            Tag is SignalTag.POSITIVE or SignalTag.NEGATIVE
         """
         result = {}
-        for category, score in vibe_vector.items():
+        for category_str, score in vibe_vector.items():
             # Intensity is absolute value of score (0-1)
             intensity = abs(score)
             
@@ -180,11 +177,17 @@ class HybridComposer:
             if intensity < 0.1:
                 continue
             
-            # Tag is simply positive or negative based on score sign
-            tag = "positive" if score >= 0 else "negative"
-            intensity_level = AssetLibrary.get_intensity_level(intensity)
+            # Convert category string to enum
+            try:
+                category = SignalCategory(category_str)
+            except ValueError:
+                logger.warning(f"Unknown category: {category_str}, skipping")
+                continue
             
-            result[category] = (tag, intensity_level, score)
+            # Tag is simply positive or negative based on score sign
+            tag = SignalTag.POSITIVE if score >= 0 else SignalTag.NEGATIVE
+            
+            result[category] = (tag, score)
 
         return result
 

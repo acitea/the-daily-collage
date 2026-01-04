@@ -7,6 +7,8 @@ and signal composition for use in img2img enhancement.
 
 from typing import List, Tuple, Dict, Optional
 
+from backend.types import Signal, SignalCategory
+
 
 class AtmosphereDescriptor:
     """
@@ -106,7 +108,7 @@ class AtmosphereDescriptor:
     @classmethod
     def generate_atmosphere_prompt(
         cls,
-        signals: List[Tuple[str, str, float, float]],
+        signals: List[Signal],
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Generate atmospheric prompts from weather signals.
@@ -115,7 +117,7 @@ class AtmosphereDescriptor:
         dominant weather condition and returns appropriate positive/negative prompts.
 
         Args:
-            signals: List of (category, tag, intensity, score) tuples
+            signals: List of Signal objects
 
         Returns:
             Tuple[positive_prompt, negative_prompt]: Weather-specific prompts
@@ -127,26 +129,24 @@ class AtmosphereDescriptor:
         max_wet_intensity = 0.0
         max_temp_intensity = 0.0
 
-        for category, tag, intensity, score in signals:
-            if category == "weather_wet" and intensity > max_wet_intensity:
-                weather_wet_signal = (category, tag, intensity)
-                max_wet_intensity = intensity
-            elif category == "weather_temp" and intensity > max_temp_intensity:
-                weather_temp_signal = (category, tag, intensity)
-                max_temp_intensity = intensity
+        for signal in signals:
+            if signal.category == SignalCategory.WEATHER_WET and signal.intensity > max_wet_intensity:
+                weather_wet_signal = signal
+                max_wet_intensity = signal.intensity
+            elif signal.category == SignalCategory.WEATHER_TEMP and signal.intensity > max_temp_intensity:
+                weather_temp_signal = signal
+                max_temp_intensity = signal.intensity
 
         # Priority: weather_wet (rain/snow) overrides weather_temp
         if weather_wet_signal and max_wet_intensity > 0.3:
-            category, tag, intensity = weather_wet_signal
-            key = (category, tag)
+            key = (weather_wet_signal.category.value, weather_wet_signal.tag.value)
             if key in cls.WEATHER_ATMOSPHERE_PROMPTS:
                 prompts = cls.WEATHER_ATMOSPHERE_PROMPTS[key]
                 return prompts["positive"], prompts["negative"]
 
         # If no precipitation, check temperature
         if weather_temp_signal and max_temp_intensity > 0.3:
-            category, tag, intensity = weather_temp_signal
-            key = (category, tag)
+            key = (weather_temp_signal.category.value, weather_temp_signal.tag.value)
             if key in cls.WEATHER_ATMOSPHERE_PROMPTS:
                 prompts = cls.WEATHER_ATMOSPHERE_PROMPTS[key]
                 return prompts["positive"], prompts["negative"]

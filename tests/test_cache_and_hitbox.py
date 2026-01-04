@@ -18,6 +18,7 @@ from backend.storage import (
     LocalStorageBackend,
     MockS3StorageBackend,
 )
+from backend.types import Signal, SignalCategory, SignalTag, IntensityLevel
 from backend.visualization.assets import ZoneLayoutComposer
 from backend.visualization.polish import MockStabilityAIPoller
 
@@ -155,8 +156,8 @@ class TestHitboxStability:
         )
 
         signals = [
-            ("transportation", "traffic", 0.5, 0.5),
-            ("weather_wet", "rain", 0.7, 0.7),
+            Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.MED, 0.5),
+            Signal(SignalCategory.WEATHER_WET, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.7),
         ]
 
         image, hitboxes = composer.compose(signals)
@@ -177,9 +178,9 @@ class TestHitboxStability:
         )
 
         signals = [
-            ("transportation", "traffic", 0.9, 0.9),
-            ("weather_wet", "snow", 0.9, 0.9),
-            ("crime", "theft", 0.9, 0.9),
+            Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.9),
+            Signal(SignalCategory.WEATHER_WET, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.9),
+            Signal(SignalCategory.CRIME, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.9),
         ]
 
         image, hitboxes = composer.compose(signals)
@@ -199,11 +200,11 @@ class TestHitboxStability:
         )
 
         # Low intensity
-        signals_low = [("transportation", "traffic", 0.2, 0.2)]
+        signals_low = [Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.LOW, 0.2)]
         _, hbs_low = composer.compose(signals_low)
 
         # High intensity
-        signals_high = [("transportation", "traffic", 0.8, 0.8)]
+        signals_high = [Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.8)]
         _, hbs_high = composer.compose(signals_high)
 
         if hbs_low and hbs_high:
@@ -219,14 +220,14 @@ class TestHitboxStability:
             assets_dir="./backend/assets",
         )
 
-        signals = [("transportation", "traffic", 0.5, 0.5)]
+        signals = [Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.MED, 0.5)]
         _, hitboxes = composer.compose(signals)
 
         assert len(hitboxes) > 0, "Should have hitboxes"
         hb = hitboxes[0]
         assert hb["signal_category"] == "transportation"
-        assert hb["signal_tag"] == "traffic"
-        assert 0.0 <= hb["signal_intensity"] <= 1.0
+        assert hb["signal_tag"] == "positive"  # Tag is now positive/negative
+        assert hb["signal_intensity"] in ["low", "med", "high"]
 
     def test_multiple_signals_produce_multiple_hitboxes(self):
         """Multiple signals should produce multiple hitboxes."""
@@ -237,9 +238,9 @@ class TestHitboxStability:
         )
 
         signals = [
-            ("transportation", "traffic", 0.5, 0.5),
-            ("weather_wet", "rain", 0.7, 0.7),
-            ("crime", "theft", 0.4, 0.4),
+            Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.MED, 0.5),
+            Signal(SignalCategory.WEATHER_WET, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.7),
+            Signal(SignalCategory.CRIME, SignalTag.POSITIVE, IntensityLevel.MED, 0.4),
         ]
 
         _, hitboxes = composer.compose(signals)
@@ -256,8 +257,8 @@ class TestHitboxStability:
         poller = MockStabilityAIPoller()
 
         signals = [
-            ("transportation", "traffic", 0.5, 0.5),
-            ("weather_wet", "rain", 0.7, 0.7),
+            Signal(SignalCategory.TRANSPORTATION, SignalTag.POSITIVE, IntensityLevel.MED, 0.5),
+            Signal(SignalCategory.WEATHER_WET, SignalTag.POSITIVE, IntensityLevel.HIGH, 0.7),
         ]
 
         image_before, hbs_before = composer.compose(signals)

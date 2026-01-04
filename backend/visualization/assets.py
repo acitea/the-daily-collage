@@ -1,45 +1,24 @@
 """
-Asset mapping and zone-based layout composition.
+Asset management and zone-based layout composition.
 
-Maps signal categories + tags + intensity to PNG assets, places them
-in zones (sky/city/street), and records hitbox metadata.
+Handles loading PNG assets and composing them into zones with hitbox tracking.
 """
 
-import logging
 import random
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Set
+import logging
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
+from backend.types import (
+    SignalCategory,
+    SignalTag,
+    IntensityLevel,
+    Signal,
+    Hitbox,
+)
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Hitbox:
-    """Represents a clickable region in the composed image."""
-
-    x: int
-    y: int
-    width: int
-    height: int
-    signal_category: str
-    signal_tag: str
-    signal_intensity: float
-    signal_score: float
-
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "x": self.x,
-            "y": self.y,
-            "width": self.width,
-            "height": self.height,
-            "signal_category": self.signal_category,
-            "signal_tag": self.signal_tag,
-            "signal_intensity": self.signal_intensity,
-            "signal_score": self.signal_score,
-        }
 
 
 class AssetLibrary:
@@ -139,22 +118,22 @@ class AssetLibrary:
     ULTIMATE_FALLBACK = "generic_default.png"
     
     @staticmethod
-    def get_intensity_level(intensity: float) -> str:
+    def get_intensity_level(intensity: float) -> IntensityLevel:
         """
-        Discretize intensity into fixed levels: low, med, high.
+        Discretize intensity into fixed levels.
         
         Args:
             intensity: Float in range [0.0, 1.0]
             
         Returns:
-            "low", "med", or "high"
+            IntensityLevel enum (LOW, MED, or HIGH)
         """
         if intensity < 0.33:
-            return "low"
+            return IntensityLevel.LOW
         elif intensity < 0.66:
-            return "med"
+            return IntensityLevel.MED
         else:
-            return "high"
+            return IntensityLevel.HIGH
 
     def __init__(self, assets_dir: str):
         """
@@ -171,21 +150,20 @@ class AssetLibrary:
 
     def get_asset(
         self,
-        category: str,
-        tag: str,
-        intensity: str,
+        category: SignalCategory,
+        tag: SignalTag,
+        intensity_level: IntensityLevel,
         use_fallback: bool = True,
     ) -> Optional[Image.Image]:
         """
         Get asset image for a category + tag + intensity combination.
 
-        Tag should be "positive" or "negative".
-        Falls back through: exact match → category+tag → ultimate fallback.
+        Falls back through: exact match → generic fallback → ultimate fallback.
 
         Args:
-            category: Signal category (e.g., 'transportation', 'crime')
-            tag: Signal tag ("positive" or "negative")
-            intensity: Intensity level ("low", "med", "high")
+            category: SignalCategory enum value
+            tag: SignalTag enum value (POSITIVE or NEGATIVE)
+            intensity_level: IntensityLevel enum value (LOW, MED, or HIGH)
             use_fallback: Whether to use fallback assets if specific not found
 
         Returns:
@@ -193,12 +171,12 @@ class AssetLibrary:
         """
 
         # Try exact match first (category, tag, intensity_level)
-        asset_key = (category, tag, intensity)
+        asset_key = (category.value, tag.value, intensity_level.value)
         filename = self.ASSET_MAP.get(asset_key)
 
         if not filename and use_fallback:
             # Fall back to generic tag with same intensity level
-            fallback_key = (category, intensity)
+            fallback_key = (category.value, intensity_level.value)
             filename = self.CATEGORY_INTENSITY_FALLBACK.get(fallback_key)
             
         if not filename and use_fallback:
@@ -229,15 +207,15 @@ class AssetLibrary:
             return None
 
     def get_asset_size(
-        self, category: str, tag: str, intensity: str
+        self, category: SignalCategory, tag: SignalTag, intensity: IntensityLevel
     ) -> Optional[Tuple[int, int]]:
         """
         Get (width, height) of asset image.
 
         Args:
-            category: Signal category
-            tag: Signal tag
-            intensity: Intensity level ("low", "med", "high")
+            category: SignalCategory enum value
+            tag: SignalTag enum value
+            intensity: IntensityLevel enum value (LOW/MED/HIGH)
 
         Returns:
             (width, height) tuple or None if asset not found
@@ -326,7 +304,7 @@ class ZoneLayoutComposer:
 
     def compose(
         self,
-        signals: List[Tuple[str, str, str, float]],
+        signals: List[Signal],
     ) -> Tuple[Image.Image, List[Hitbox]]:
         """
         Compose image with signals placed in zones.
@@ -334,11 +312,7 @@ class ZoneLayoutComposer:
         Note: Atmosphere is handled via prompting only (no asset overlays).
 
         Args:
-            signals: List of (category, tag, intensity, score) tuples
-                     category: Signal category (e.g., 'transportation', 'crime')
-                     tag: Specific event tag (e.g., 'traffic', 'theft')
-                     intensity: Intensity level ("low", "med", "high") for asset selection
-                     score: Original -1.0 to 1.0 score from model
+            signals: List of Signal objects containing category, tag, intensity, score
 
         Returns:
             Tuple[Image, hitboxes]: Composed PIL Image and hitbox list
@@ -362,28 +336,28 @@ class ZoneLayoutComposer:
         return image, self.hitboxes
 
     def _assign_signals_to_zones(
-        self, signals: List[Tuple[str, str, float, float]]
-    ) -> Dict[str, List[Tuple[str, str, float, float]]]:
+        self, signals: List[Signal]
+    ) -> Dict[str, List[Signal]]:
         """
         Assign signals to zones based on category.
 
         Args:
-            signals: List of (category, tag, intensity, score) tuples
+            signals: List of Signal objects
 
         Returns:
-            Dict mapping zone name to list of signals
+            Dict mapping zone name to list of Signal objects
         """
         zones = {"sky": [], "city": [], "street": []}
 
-        for category, tag, intensity, score in signals:
+        for signal in signals:
             # Skip weather categories - they are handled via prompts only
-            if category in ("weather_temp", "weather_wet"):
+            if signal.category in (SignalCategory.WEATHER_TEMP, SignalCategory.WEATHER_WET):
                 continue
             # Route by category
-            elif category in ("crime", "emergencies", "transportation"):
-                zones["street"].append((category, tag, intensity, score))
+            elif signal.category in (SignalCategory.CRIME, SignalCategory.EMERGENCIES, SignalCategory.TRANSPORTATION):
+                zones["street"].append(signal)
             else:  # festivals, sports, economics, politics
-                zones["city"].append((category, tag, intensity, score))
+                zones["city"].append(signal)
 
         return zones
 
@@ -391,7 +365,7 @@ class ZoneLayoutComposer:
         self,
         image: Image.Image,
         zone_name: str,
-        signals: List[Tuple[str, str, str, float]],
+        signals: List[Signal],
     ) -> None:
         """
         Place signals within a zone using randomized grid-based placement.
@@ -399,7 +373,7 @@ class ZoneLayoutComposer:
         Args:
             image: PIL Image to draw on
             zone_name: Zone name (sky/city/street)
-            signals: Signals to place in this zone
+            signals: Signal objects to place in this zone
         """
         if not signals:
             return
@@ -430,9 +404,9 @@ class ZoneLayoutComposer:
                 f"Some signals may overlap."
             )
 
-        for idx, (category, tag, intensity, score) in enumerate(signals):
+        for idx, signal in enumerate(signals):
             if idx >= len(available_cells):
-                logger.warning(f"Ran out of cells in zone {zone_name}, skipping signal {category}/{tag}")
+                logger.warning(f"Ran out of cells in zone {zone_name}, skipping signal {signal.category.value}/{signal.tag.value}")
                 break
                 
             col, row = available_cells[idx]
@@ -449,9 +423,9 @@ class ZoneLayoutComposer:
             y = max(zone_y_start, min(cell_center_y + offset_y, zone_y_end))
 
             # Get asset (pre-sized based on intensity level)
-            asset = self.asset_library.get_asset(category, tag, intensity)
+            asset = self.asset_library.get_asset(signal.category, signal.tag, signal.intensity)
             if not asset:
-                logger.debug(f"No asset for {category}/{tag}, skipping")
+                logger.debug(f"No asset for {signal.category.value}/{signal.tag.value}, skipping")
                 continue
 
             # Place on canvas (centered at x, y)
@@ -466,10 +440,10 @@ class ZoneLayoutComposer:
                 y=paste_y,
                 width=asset.width,
                 height=asset.height,
-                signal_category=category,
-                signal_tag=tag,
-                signal_intensity=intensity,
-                signal_score=score,
+                signal_category=signal.category,
+                signal_tag=signal.tag,
+                signal_intensity=signal.intensity,
+                signal_score=signal.score,
             )
             self.hitboxes.append(hitbox)
 
