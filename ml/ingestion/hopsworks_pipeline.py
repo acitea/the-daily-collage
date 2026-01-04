@@ -32,6 +32,13 @@ try:
 except ImportError:
     HAS_FINE_TUNED_MODEL = False
 
+# Try to import embedding-based labeling (optional)
+try:
+    from ml.utils.embedding_labeling import classify_article_embedding
+    HAS_EMBEDDING_LABELING = True
+except ImportError:
+    HAS_EMBEDDING_LABELING = False
+
 _fine_tuned_classifier = None
 
 logging.basicConfig(
@@ -68,34 +75,61 @@ TAG_VOCAB = {
 }
 
 
-def classify_article(title: str, description: str = "") -> Dict[str, Tuple[float, str]]:
+def classify_article(
+    title: str,
+    description: str = "",
+    method: str = "auto"
+) -> Dict[str, Tuple[float, str]]:
     """
     Classify a single article into signal categories.
     
-    Uses fine-tuned BERT model if available, falls back to keyword classification.
+    Method priority (auto mode):
+    1. Fine-tuned BERT model (if available)
+    2. Embedding-based classification (if available)
+    3. Keyword-based fallback (always available)
     
     Args:
         title: Article title
         description: Article description/body
+        method: Classification method:
+            - "auto": Try fine-tuned model, then embedding, then keywords
+            - "embedding": Use embedding-based (semantic similarity)
+            - "keywords": Use keyword matching
+            - "ml": Use fine-tuned model only, fall back to keywords if unavailable
         
     Returns:
         Dict mapping category to (score, tag) tuple
         e.g., {"emergencies": (0.8, "fire"), "crime": (0.0, "")}
     """
-    # Try fine-tuned model first
-    global _fine_tuned_classifier
+    # Try fine-tuned model first (if method allows)
+    if method in ["auto", "ml"]:
+        global _fine_tuned_classifier
+        
+        if HAS_FINE_TUNED_MODEL:
+            try:
+                if _fine_tuned_classifier is None:
+                    _fine_tuned_classifier = get_fine_tuned_classifier()
+                
+                result = _fine_tuned_classifier.classify(title, description)
+                if result:
+                    logger.debug(f"ML Classification: {result}")
+                    return result
+            except Exception as e:
+                logger.warning(f"Fine-tuned model failed: {e}")
+                if method == "ml":
+                    # If ML method requested but failed, fall back to keywords
+                    pass
     
-    if HAS_FINE_TUNED_MODEL:
-        try:
-            if _fine_tuned_classifier is None:
-                _fine_tuned_classifier = get_fine_tuned_classifier()
-            
-            result = _fine_tuned_classifier.classify(title, description)
-            if result:
-                logger.debug(f"ML Classification: {result}")
-                return result
-        except Exception as e:
-            logger.warning(f"Fine-tuned model failed, using keyword fallback: {e}")
+    # Try embedding-based classification (if method allows and available)
+    if method in ["auto", "embedding"]:
+        if HAS_EMBEDDING_LABELING:
+            try:
+                result = classify_article_embedding(title, description)
+                if result:
+                    logger.debug(f"Embedding Classification: {result}")
+                    return result
+            except Exception as e:
+                logger.warning(f"Embedding classification failed: {e}")
     
     # Fallback to keyword-based classification
     text = (title + " " + description).lower()
