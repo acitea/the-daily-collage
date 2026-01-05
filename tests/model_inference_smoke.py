@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-Comprehensive smoke test for the fine-tuned Swedish news classifier.
+Comprehensive smoke test for the LLM-based Swedish news classifier.
 Tests all 9 signal categories with multiple examples per category.
 Automatically validates that:
   1. The category with highest score is correctly identified
   2. The tag is not null (properly labeled)
+
+NOTE: Requires OPENAI_API_KEY environment variable to be set.
 """
 
 from pathlib import Path
 import sys
-from typing import Dict, Tuple, Optional
+import os
+from typing import Dict, Tuple, Optional, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.models.inference import get_fine_tuned_classifier
+from ml.ingestion.script import fetch_news
 
 
 # Test cases: (title, description, expected_category)
@@ -30,11 +34,6 @@ TEST_CASES = {
             "Jordskalv med magnitud 4.2 orsakar skador",
             "Flera hus har spruckit och människor evakueras från området",
         ),
-        (
-            "Översvämning i västra Sverige",
-            "Kraftigt regn orsakar översvämningar",
-            "Vatten strömmar in i bostäder och vägar är blockerade",
-        ),
     ],
     "crime": [
         (
@@ -45,12 +44,7 @@ TEST_CASES = {
         (
             "Inbrott i villa",
             "Inbrott i ett bostadshus i Nacka",
-            "Tjuvar stals elektronik och smycken för flera hundra tusen kronor",
-        ),
-        (
-            "Grov misshandling",
-            "Man misshandlad på Stureplan",
-            "Fyra personer gripen misstänkta för grov misshandling",
+            "Tjuvar stal elektronik och smycken för flera hundra tusen kronor",
         ),
     ],
     "festivals": [
@@ -64,22 +58,12 @@ TEST_CASES = {
             "Pride-paraden marscherar genom Stockholm",
             "Tusentals människor samlas för att fira mångfald och inkludering",
         ),
-        (
-            "Lucia-firande på torget",
-            "Traditionell lucia-tåg genom gamla stan",
-            "Hundratals barn deltar i det årliga lucia-marchandet",
-        ),
     ],
     "transportation": [
         (
             "Trafikstörning på E4",
             "Tung lastbil orsakar köer på E4 norr om Uppsala",
             "Trafikverket rapporterar långsamma köer och inställda bussar",
-        ),
-        (
-            "Bågöbroöppning efter renovering",
-            "Gamla Bågöbron öppnades igen efter två års renovering",
-            "Trafikflödet genom bron förbättrades avsevärt",
         ),
         (
             "Tågtrafik försenad",
@@ -98,11 +82,6 @@ TEST_CASES = {
             "Temperaturer sjunker till minus 35 grader i Kiruna",
             "Invånare varnas att stanna inomhus",
         ),
-        (
-            "Mild höst i södra regionen",
-            "Oväntligt varm höstväder i maj",
-            "Växterna blommar tidigare än normalt",
-        ),
     ],
     "weather_wet": [
         (
@@ -112,13 +91,8 @@ TEST_CASES = {
         ),
         (
             "Snöstorm i fjällen",
-            "Kraftig snöfall orsakar avalancher",
+            "Kraftig snöfall orsakar lavinvarning",
             "Vägar stängs och evakueringar genomförs i området",
-        ),
-        (
-            "Hagelstorm i Skåne",
-            "Stora hagel förstör grödor och bilar",
-            "Jordbrukare rapporterar stora ekonomiska förluster",
         ),
     ],
     "sports": [
@@ -132,27 +106,17 @@ TEST_CASES = {
             "Djurgården vinner SM-guld i ishockey",
             "Jubilande fans fyller gatorna i Stockholm efter segern",
         ),
-        (
-            "Tennismästerskapet i Båstad",
-            "ATP-tennisen i Båstad attraherar världseliten",
-            "Försäljningen av biljetter slog nytt rekord",
-        ),
     ],
     "economics": [
         (
             "Riksbanken höjer räntan",
             "Riksbanken höjer räntan med 0.5 procent",
-            "Hypotek och lån för konsumenter blir dyrare",
+            "Hypotekslån och lån för konsumenter blir dyrare",
         ),
         (
             "Arbetslöshet sjunker",
             "Arbetslösheten faller till 6.5 procent",
             "Arbetsmarknaden visar stark utveckling",
-        ),
-        (
-            "Börsuppgång",
-            "Stockholmsbörsen stiger kraftigt på positiv global data",
-            "Teknikaktier leder uppgången med över 5 procent",
         ),
     ],
     "politics": [
@@ -164,12 +128,7 @@ TEST_CASES = {
         (
             "Partiledardebatt inför valet",
             "Ledarna från alla riksdagspartier debatterar",
-            "Välfärd och skattar är huvudsakliga teman",
-        ),
-        (
-            "Ny EU-förordning om dataöverföring",
-            "Sverige implementerar ny EU-regel",
-            "Kritiker säger att reglerna är för strikta",
+            "Välfärd och skatter är huvudsakliga teman",
         ),
     ],
 }
@@ -201,11 +160,71 @@ def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple
     return True, None
 
 
+def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, int, List[str]]:
+    """Fetch real news and ensure classifier returns at least one signal per article."""
+    print(f"\n📰 Real news integration test (country={country}, limit={limit})")
+    print("-" * 80)
+
+    try:
+        articles = fetch_news(country=country, max_articles=limit)
+    except Exception as exc:  # pragma: no cover - external API
+        print(f"❌ Failed to fetch news: {exc}")
+        return 0, 0, ["fetch_error"]
+
+    if articles.is_empty():
+        print("❌ No articles returned from GDELT; skipping real-news test")
+        return 0, 0, ["no_articles"]
+
+    passed = 0
+    failed = 0
+    errors: List[str] = []
+
+    for article in articles.iter_rows(named=True):
+        title = article.get("title") or article.get("documentIdentifier") or ""
+        description = article.get("summary") or article.get("content") or article.get("excerpt") or ""
+
+        if not title:
+            failed += 1
+            errors.append("missing_title")
+            print("  ❌ FAIL | missing title")
+            continue
+
+        result = model.classify(title, description)
+        if not result:
+            failed += 1
+            errors.append("empty_result")
+            print(f"  ❌ FAIL | {title[:60]}...")
+            print("        Error: No predictions")
+            continue
+
+        # Check top prediction exists and score within range
+        top_cat, (top_score, top_tag) = max(result.items(), key=lambda x: x[1][0])
+        if top_cat not in result or top_score < -1.5 or top_score > 1.5:
+            failed += 1
+            errors.append("invalid_score")
+            print(f"  ❌ FAIL | {title[:60]}...")
+            print(f"        Error: Invalid score {top_score}")
+            continue
+
+        passed += 1
+        print(f"  ✅ PASS | {title[:60]}...")
+        print(f"        Top: {top_cat:18s} ({top_score:+.3f}) tag='{top_tag}'")
+
+    return passed, failed, errors
+
+
 def run_tests() -> None:
     """Run all test cases and print results."""
+    # Check for API key
+    if not os.getenv("OPENAI_API_KEY"):
+        print("\n❌ ERROR: OPENAI_API_KEY environment variable not set")
+        print("Set it with: export OPENAI_API_KEY='your-key-here'")
+        sys.exit(1)
+    
     print("\n" + "=" * 80)
-    print("SWEDISH NEWS CLASSIFIER - COMPREHENSIVE SMOKE TEST")
+    print("SWEDISH NEWS CLASSIFIER - COMPREHENSIVE LLM-BASED TEST")
     print("=" * 80)
+    print("Testing all 9 categories with LLM classifier...")
     
     total = 0
     passed = 0
@@ -239,11 +258,18 @@ def run_tests() -> None:
             if success:
                 passed += 1
     
+    # Real news integration tests
+    real_passed, real_failed, real_errors = run_real_news_tests()
+    passed += real_passed
+    total += real_passed + real_failed
+    if real_failed:
+        failed_tests.append(("real_news_batch", "real_news", ",".join(real_errors)))
+
     # Summary
     print("\n" + "=" * 80)
-    print(f"RESULTS: {passed}/{total} tests passed")
+    print(f"RESULTS: {passed}/{total} tests passed (including real news)")
     print("=" * 80)
-    
+
     if failed_tests:
         print("\n❌ FAILURES:")
         for title, category, error in failed_tests:

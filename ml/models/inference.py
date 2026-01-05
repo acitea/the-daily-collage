@@ -1,14 +1,13 @@
 """
-Production inference module for fine-tuned model.
-Integrates with existing hopsworks_pipeline.py classification system.
+LLM-based classification module for news signal detection.
+Uses OpenAI API to classify articles into signal categories with intensity scores.
 """
 
-import torch
-import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer
+import json
+import logging
+import os
 from pathlib import Path
 import sys
-import logging
 from typing import Dict, Tuple, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,145 +17,158 @@ from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES, TAG_VOCAB
 
 logger = logging.getLogger(__name__)
 
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Try to import OpenAI
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+    logger.warning("OpenAI not installed. LLM classification will not work.")
 
 
 class NewsSignalClassifierInference:
     """
-    Production inference wrapper for fine-tuned model.
-    Can be used as a drop-in replacement for classify_article().
+    LLM-based inference for news signal classification.
+    Uses OpenAI API to classify articles and assign intensity scores.
     """
 
     def __init__(
         self,
-        model_path: str,
-        base_model: str = "KB/bert-base-swedish-cased",
-        device: Optional[torch.device] = None,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.3,
     ):
         """
-        Load fine-tuned model for inference.
+        Initialize LLM-based classifier.
 
         Args:
-            model_path: Path to best_model.pt checkpoint
-            base_model: Base model name
-            device: torch device (auto-detected if None)
+            api_key: OpenAI API key (uses OPENAI_API_KEY env var if None)
+            model: OpenAI model to use
+            temperature: Sampling temperature (0-1)
         """
-        self.device = device or DEVICE
-        self.tokenizer = AutoTokenizer.from_pretrained(base_model)
+        if not HAS_OPENAI:
+            raise ImportError("openai package required. Install with: pip install openai")
+        
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OpenAI API key required. Set OPENAI_API_KEY env var or pass api_key parameter.")
+        
+        self.model = model
+        self.temperature = temperature
+        self.client = openai.OpenAI(api_key=self.api_key)
+        
+        logger.info(f"✓ Initialized LLM classifier with model: {model}")
 
-        # Load model architecture
-        self.model = self._build_model(base_model)
-
-        # Load weights
-        checkpoint = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.model.to(self.device)
-        self.model.eval()
-
-        logger.info(f"✓ Loaded fine-tuned model from {model_path}")
-
-    def _build_model(self, base_model: str) -> nn.Module:
-        """Build model architecture (mirrors training model)."""
-        bert = AutoModel.from_pretrained(base_model)
-        hidden_size = 768
-
-        # Score heads (must match quick_finetune.py architecture exactly)
-        score_heads = nn.ModuleDict({
-            cat: nn.Sequential(
-                nn.Linear(hidden_size, 256),
-                nn.ReLU(),
-                nn.LayerNorm(256),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.LayerNorm(128),
-                nn.Dropout(0.1),
-                nn.Linear(128, 1),
-                nn.Tanh()
-            )
-            for cat in SIGNAL_CATEGORIES
-        })
-
-        # Tag heads (must match quick_finetune.py architecture exactly)
-        tag_heads = nn.ModuleDict({
-            cat: nn.Sequential(
-                nn.Linear(hidden_size, 256),
-                nn.ReLU(),
-                nn.LayerNorm(256),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.LayerNorm(128),
-                nn.Dropout(0.1),
-                nn.Linear(128, len(TAG_VOCAB[cat]))
-            )
-            for cat in SIGNAL_CATEGORIES
-        })
-
-        # Combine into module
-        class Model(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.bert = bert
-                self.score_heads = score_heads
-                self.tag_heads = tag_heads
-
-            def forward(self, input_ids, attention_mask):
-                outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-                pooled = outputs.pooler_output
-
-                results = {}
-                for cat in SIGNAL_CATEGORIES:
-                    score = self.score_heads[cat](pooled).squeeze(-1)
-                    tag_logits = self.tag_heads[cat](pooled)
-                    results[cat] = (score, tag_logits)
-
-                return results
-
-        return Model()
-
-    @torch.no_grad()
     def classify(self, title: str, description: str = "") -> Dict[str, Tuple[float, str]]:
         """
-        Classify article using fine-tuned model.
+        Classify article using LLM.
+
+        Args:
+            title: Article title
+            description: Article description/body (optional)
 
         Returns:
             Dict mapping category -> (score, tag)
             e.g., {"emergencies": (0.8, "fire"), "crime": (0.0, "")}
         """
-        text = f"{title} [SEP] {description}"
+        # Truncate description to avoid token limits
+        desc_truncated = description[:1000] if description else ""
+        
+        prompt = f"""Analyze this Swedish news article and classify it into signal categories.
 
-        # Tokenize
-        inputs = self.tokenizer(
-            text,
-            max_length=512,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+ARTICLE:
+Title: {title}
+Description: {desc_truncated}
 
-        input_ids = inputs['input_ids'].to(self.device)
-        attention_mask = inputs['attention_mask'].to(self.device)
+SIGNAL CATEGORIES (score range and tags):
+- emergencies: Natural disasters, accidents, fires, evacuations (-1 to -0.5 for severe)
+  Tags: {', '.join(TAG_VOCAB['emergencies'][1:])}
+  
+- crime: Criminal incidents, violence, arrests, theft (-1 to -0.5 for serious)
+  Tags: {', '.join(TAG_VOCAB['crime'][1:])}
+  
+- festivals: Cultural events, celebrations, concerts, entertainment (0.3 to 1 for positive)
+  Tags: {', '.join(TAG_VOCAB['festivals'][1:])}
+  
+- transportation: Traffic accidents, congestion, delays, closures (-0.5 to 0 for problems)
+  Tags: {', '.join(TAG_VOCAB['transportation'][1:])}
+  
+- weather_temp: Temperature extremes, heatwaves, cold snaps (-0.8 to 0 for severe)
+  Tags: {', '.join(TAG_VOCAB['weather_temp'][1:])}
+  
+- weather_wet: Rain, flooding, snow, storms (-0.8 to 0 for severe)
+  Tags: {', '.join(TAG_VOCAB['weather_wet'][1:])}
+  
+- sports: Sporting events, competitions, victories (-0.5 to 1)
+  Tags: {', '.join(TAG_VOCAB['sports'][1:])}
+  
+- economics: Markets, business, employment, inflation (-0.8 to 1)
+  Tags: {', '.join(TAG_VOCAB['economics'][1:])}
+  
+- politics: Elections, policy, governance, protests (-0.5 to 1)
+  Tags: {', '.join(TAG_VOCAB['politics'][1:])}
 
-        # Forward pass
-        predictions = self.model(input_ids, attention_mask)
+SCORING GUIDELINES:
+- Score represents intensity/impact (-1 to +1)
+- Negative scores for problems/bad events (fires, crime, accidents, storms)
+- Positive scores for good events (festivals, victories, celebrations, economic growth)
+- 0 = irrelevant/absent
+- 0.3 to 0.5 or -0.3 to -0.5 = moderate impact
+- 0.6 to 0.9 or -0.6 to -0.9 = major impact
+- Only include categories that are clearly relevant to this article
 
-        # Process outputs
-        results = {}
-        for cat in SIGNAL_CATEGORIES:
-            score_tensor, tag_logits = predictions[cat]
-            score = float(score_tensor.squeeze().cpu())
+Return ONLY valid JSON:
+{{
+  "emergencies": {{"score": -0.8, "tag": "fire"}},
+  "crime": {{"score": -0.6, "tag": "theft"}},
+  ...
+}}
 
-            # Get tag
-            tag_idx = torch.argmax(tag_logits, dim=-1).item()
-            tag = TAG_VOCAB[cat][tag_idx] if tag_idx < len(TAG_VOCAB[cat]) else ""
+If a category is not relevant, omit it entirely from the response."""
 
-            # Include if relevant (lowered threshold for sparse training data)
-            # For limited training data, use 0.0 threshold to show all non-neutral predictions
-            if abs(score) > 0.01 or tag != "":
-                results[cat] = (score, tag)
-
-        return results
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+                max_tokens=500,
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Remove markdown code blocks if present
+            if result_text.startswith("```"):
+                result_text = result_text.split("```")[1]
+                if result_text.startswith("json"):
+                    result_text = result_text[4:]
+            
+            result_json = json.loads(result_text)
+            
+            # Convert to expected format
+            results = {}
+            for category, data in result_json.items():
+                if category in SIGNAL_CATEGORIES:
+                    score = float(data.get("score", 0.0))
+                    tag = str(data.get("tag", ""))
+                    
+                    # Validate tag is in vocabulary
+                    if tag and tag not in TAG_VOCAB[category]:
+                        # Find closest match or use empty
+                        tag = ""
+                    
+                    # Only include if score is non-zero or tag is present
+                    if abs(score) > 0.01 or tag:
+                        results[category] = (score, tag)
+            
+            return results
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response: {e}")
+            logger.debug(f"Response was: {result_text}")
+            return {}
+        except Exception as e:
+            logger.error(f"LLM classification failed: {e}")
+            return {}
 
 
 # Global classifier instance
@@ -164,15 +176,17 @@ _classifier: Optional[NewsSignalClassifierInference] = None
 
 
 def get_fine_tuned_classifier(
-    model_path: str = "ml/models/checkpoints/best_model.pt",
+    api_key: Optional[str] = None,
+    model: str = "gpt-4o-mini",
 ) -> NewsSignalClassifierInference:
-    """Get or create global classifier instance."""
+    """
+    Get or create global LLM classifier instance.
+    
+    Args:
+        api_key: OpenAI API key (uses OPENAI_API_KEY env var if None)
+        model: OpenAI model to use
+    """
     global _classifier
-
     if _classifier is None:
-        if not Path(model_path).exists():
-            raise FileNotFoundError(f"Model not found: {model_path}")
-
-        _classifier = NewsSignalClassifierInference(model_path)
-
+        _classifier = NewsSignalClassifierInference(api_key=api_key, model=model)
     return _classifier
