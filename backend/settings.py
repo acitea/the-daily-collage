@@ -8,6 +8,7 @@ configuration via environment variables with sensible defaults.
 import os
 from typing import Optional
 from dataclasses import dataclass
+from dotenv import load_dotenv; load_dotenv()
 
 
 @dataclass
@@ -16,6 +17,17 @@ class VibeHashSettings:
 
     # Enable caching globally
     enable_cache: bool = True
+
+
+@dataclass
+class PolishSettings:
+    """Settings for image polishing provider selection."""
+
+    # Which provider to use for polishing: 'stability' or 'replicate'
+    provider: str = os.getenv("POLISH_PROVIDER", "stability").lower()
+
+    # Enable polishing globally (can be disabled for testing)
+    enable: bool = os.getenv("ENABLE_POLISH", "false").lower() == "true"
 
 
 @dataclass
@@ -55,6 +67,44 @@ class StabilityAISettings:
 
     # Timeout for Stability API requests (seconds)
     timeout_seconds: int = 60
+
+
+@dataclass
+class ReplicateAISettings:
+    """Settings for Replicate API-based image polishing."""
+
+    # Replicate API token
+    api_token: str = os.getenv("REPLICATE_API_TOKEN", "")
+
+    # Model version to use (default: Stability SDXL)
+    model_id: str = os.getenv(
+        "REPLICATE_MODEL_ID",
+        "stability-ai/sdxl:e6d46e9fa17efd92a6cb9176a9715231ff7a29108d5c4e45c89e42bdbf8dd265"
+    )
+
+    # Image denoising strength (0-1, lower = more preserve layout)
+    image_strength: float = 0.75
+
+    # Guidance scale: How strongly to follow the prompt (7-15, higher = stricter adherence)
+    guidance_scale: float = 12.0
+
+    # Style preset for cartoonish vibes
+    style_preset: str = "comic-book"
+
+    # Number of output images
+    num_outputs: int = 1
+
+    # Number of inference steps
+    num_inference_steps: int = 30
+
+    # Enable polishing via Replicate (can be disabled for testing)
+    enable_polish: bool = os.getenv(
+        "REPLICATE_ENABLE_POLISH", "false"
+    ).lower() == "true"
+
+    # Timeout for Replicate API requests (seconds)
+    timeout_seconds: int = 300
+
 
 
 @dataclass
@@ -160,8 +210,9 @@ class Settings:
     """
 
     def __init__(self):
-        self.vibe_hash = VibeHashSettings()
+        self.polish = PolishSettings()
         self.stability_ai = StabilityAISettings()
+        self.replicate_ai = ReplicateAISettings()
         self.storage = StorageSettings()
         self.hopsworks = HopsworksSettings()
         self.assets = AssetSettings()
@@ -177,10 +228,23 @@ class Settings:
         """
         issues = []
 
-        if self.stability_ai.enable_polish and not self.stability_ai.api_key:
-            issues.append(
-                "WARNING: Stability AI polishing enabled but API key not set"
-            )
+        # Validate polish provider
+        if self.polish.enable:
+            if self.polish.provider == "stability":
+                if not self.stability_ai.api_key:
+                    issues.append(
+                        "WARNING: Stability AI polishing enabled but API key not set"
+                    )
+            elif self.polish.provider == "replicate":
+                if not self.replicate_ai.api_token:
+                    issues.append(
+                        "WARNING: Replicate AI polishing enabled but API token not set"
+                    )
+            else:
+                issues.append(
+                    f"WARNING: Unknown polish provider '{self.polish.provider}'. "
+                    "Use 'stability' or 'replicate'"
+                )
 
         if self.storage.backend == "s3" and (
             not self.storage.s3_access_key

@@ -1,0 +1,172 @@
+"""
+Replicate AI image-to-image polishing provider.
+
+Uses the official Replicate Python SDK to enhance image style while
+preserving layout. Supports async prediction with automatic polling.
+"""
+
+import logging
+from typing import Optional
+
+import replicate
+
+from backend.visualization.polish.base import ImagePoller
+from backend.visualization.polish.utils import prepare_image
+
+logger = logging.getLogger(__name__)
+
+
+class ReplicateAIPoller(ImagePoller):
+    """
+    Interfaces with Replicate API for image-to-image polishing.
+
+    Takes layout PNG and applies subtle style improvements using
+    Replicate's hosted models (e.g., Stability Diffusion XL).
+    """
+
+    def __init__(
+        self,
+        api_token: str,
+        model_id: str = "stability-ai/sdxl:e6d46e9fa17efd92a6cb9176a9715231ff7a29108d5c4e45c89e42bdbf8dd265",
+        image_strength: float = 0.35,
+        guidance_scale: float = 12.0,
+        style_preset: str = "comic-book",
+        num_outputs: int = 1,
+        num_inference_steps: int = 30,
+        timeout: int = 300,
+    ):
+        """
+        Initialize Replicate API client.
+
+        Args:
+            api_token: Replicate API token (automatically used by SDK)
+            model_id: Model/version ID to use
+            image_strength: Denoising strength (0-1, lower = preserve more)
+            guidance_scale: Prompt adherence (7-15, higher = follow prompt more strictly)
+            style_preset: Style preset (e.g., 'comic-book', 'digital-art')
+            num_outputs: Number of output images
+            num_inference_steps: Number of inference steps
+            timeout: Request timeout in seconds
+        """
+        self.api_token = api_token
+        self.model_id = model_id
+        self.image_strength = image_strength
+        self.guidance_scale = guidance_scale
+        self.style_preset = style_preset
+        self.num_outputs = num_outputs
+        self.num_inference_steps = num_inference_steps
+        self.timeout = timeout
+        
+        # Set API token for Replicate SDK
+        import os
+        os.environ["REPLICATE_API_TOKEN"] = api_token
+
+    def polish(
+        self,
+        image_data: bytes,
+        prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+    ) -> Optional[bytes]:
+        """
+        Apply Replicate AI polish to an image.
+
+        Uses Img2Img with low denoising strength to enhance style
+        while preserving the layout. Includes polling for async results.
+
+        Args:
+            image_data: PIL Image bytes (PNG or JPEG)
+            prompt: Complete positive prompt (including atmosphere if needed)
+            negative_prompt: Complete negative prompt (including atmosphere if needed)
+
+        Returns:
+            bytes: Polished image PNG data, or input image if polish failed
+        """
+        if not self.api_token:
+            logger.warning("Replicate API token not set, skipping polish")
+            return image_data
+
+        try:
+            # Attempt to polish with async polling
+            polished_data = self._call_replicate_api(
+                image_data=image_data,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+            )
+            
+            if polished_data:
+                logger.info("Successfully polished image with Replicate AI")
+                return polished_data
+            else:
+                logger.warning("Replicate API returned no data, using unpolished image")
+                return image_data
+                
+        except Exception as e:
+            logger.error(f"Replicate AI polish failed: {e}")
+            logger.info("Falling back to unpolished image")
+            return image_data
+
+    def _call_replicate_api(
+        self,
+        image_data: bytes,
+        prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+    ) -> Optional[bytes]:
+        """
+        Call Replicate API using the official SDK.
+        
+        The SDK handles async polling automatically, so this is much simpler
+        than manual HTTP requests.
+        
+        Args:
+            image_data: PIL Image bytes (PNG or JPEG)
+            prompt: Complete positive prompt for style (includes atmosphere)
+            negative_prompt: Complete negative prompt (includes atmosphere)
+            
+        Returns:
+            bytes: Polished image PNG data or None if API returns error
+        """
+        # Prepare image using shared utility (resize + convert to JPEG)
+        image_bytes = prepare_image(
+            image_data,
+            target_width=1344,
+            target_height=768,
+            output_format="JPEG",
+            quality=95,
+            convert_to_rgb=True,
+        )
+        
+        # Use provided prompts or defaults
+        if not prompt:
+            prompt = "Transform Stockholm's cityscape into a vibrant, whimsical cartoon illustration, where the narratives shown by sections that look like pasted stickers are woven organically into the urban landscape. Render the entire scene in a unified cartoon aesthetic with cel-shaded depth, bold outlines, warm saturated colors, and playful geometric architecture. Each narrative element flows seamlessly as an integral part of the composition, not as overlaid additions—the cityscape itself tells these interconnected success stories through visual metaphor and scene design rather than literal symbols. Whimsical, charming, optimistic mood throughout, in the style of Pixar's conceptual art, Ghibli's environmental storytelling, and European comic illustration tradition."
+
+        logger.info(
+            f"Calling Replicate API with image_strength={self.image_strength}"
+        )
+        logger.debug(f"Prompt: {prompt}")
+
+        try:
+            # Call Replicate API using the official SDK
+            # The SDK automatically handles polling for async predictions
+            output = replicate.run(
+                self.model_id,
+                input={
+                    "prompt": prompt,
+                    "input_images": [image_bytes],
+                    "aspect_ratio": "match_input_image",
+                    "output_format": "jpg",
+                    "output_quality": 80,
+                    "resolution": "1 MP",
+                    "safety_tolerance": 5
+                },
+                timeout=self.timeout,
+            )
+            
+            # To access the file URL:
+            logger.info(f"Generated Image URL: {output.url}")
+            #=> "https://replicate.delivery/.../output.webp"
+
+            return output.read()
+                
+        except Exception as e:
+            logger.error(f"Replicate API error: {e}")
+            return None

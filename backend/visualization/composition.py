@@ -4,7 +4,7 @@ Image generation and template composition module.
 Generates cartoonish visualizations based on detected signals
 using hybrid layout + polish approach:
 1. Asset-based layout with zone placement and hitbox tracking
-2. Stability AI Img2Img polish with low denoise (0.35) to preserve layout
+2. AI polish (Stability AI or Replicate) with low denoise to preserve layout
 """
 
 import logging
@@ -56,18 +56,34 @@ class HybridComposer:
             street_zone_height=settings.layout.street_zone_height,
         )
 
-        # Polish engine
-        self.poller = create_poller(
-            enable_polish=settings.stability_ai.enable_polish,
-            api_key=settings.stability_ai.api_key,
-            api_host=settings.stability_ai.api_host,
-            engine_id=settings.stability_ai.model_id,
-            image_strength=settings.stability_ai.image_strength,
-            cfg_scale=settings.stability_ai.cfg_scale,
-            style_preset=settings.stability_ai.style_preset,
-            sampler=settings.stability_ai.sampler,
-            timeout=settings.stability_ai.timeout_seconds,
-        )
+        # Polish engine - choose provider based on settings
+        if settings.polish.provider == "replicate":
+            logger.info("Polish provider: Replicate AI")
+            self.poller = create_poller(
+                provider="replicate",
+                enable_polish=settings.polish.enable,
+                api_token=settings.replicate_ai.api_token,
+                replicate_model_id=settings.replicate_ai.model_id,
+                image_strength=settings.replicate_ai.image_strength,
+                guidance_scale=settings.replicate_ai.guidance_scale,
+                style_preset=settings.replicate_ai.style_preset,
+                timeout=settings.replicate_ai.timeout_seconds,
+            )
+        else:
+            # Default to Stability AI
+            logger.info("Polish provider: Stability AI")
+            self.poller = create_poller(
+                provider="stability",
+                enable_polish=settings.polish.enable,
+                api_key=settings.stability_ai.api_key,
+                api_host=settings.stability_ai.api_host,
+                engine_id=settings.stability_ai.model_id,
+                image_strength=settings.stability_ai.image_strength,
+                cfg_scale=settings.stability_ai.cfg_scale,
+                style_preset=settings.stability_ai.style_preset,
+                sampler=settings.stability_ai.sampler,
+                timeout=settings.stability_ai.timeout_seconds,
+            )
 
     def compose(
         self,
@@ -111,8 +127,14 @@ class HybridComposer:
         layout_data = img_bytes.getvalue()
 
         # Step 2: Polish - enhance style while preserving layout
+        polish_provider = settings.polish.provider.capitalize()
+        image_strength_setting = (
+            settings.replicate_ai.image_strength 
+            if settings.polish.provider == "replicate" 
+            else settings.stability_ai.image_strength
+        )
         logger.info(
-            f"Polishing image with Stability AI (strength={settings.stability_ai.image_strength})"
+            f"Polishing image with {polish_provider} (strength={image_strength_setting})"
         )
 
         # Generate weather-based atmosphere prompts
