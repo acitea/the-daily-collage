@@ -1,15 +1,17 @@
 """
-Complete labeling pipeline: Fetch → Auto-Label → Review → Export
+Complete labeling pipeline with BATCH LLM verification
 
 This script provides an end-to-end solution for creating high-quality
-training data for the fine-tuned BERT model.
+training data for the fine-tuned BERT model, with efficient batch LLM processing.
 
 Usage:
-    python ml/utils/label_dataset.py --articles 500 --country sweden
+    python ml/utils/label_dataset.py --articles 500 --country sweden --llm-verify
 """
 
 import argparse
 import sys
+import json
+import logging
 from pathlib import Path
 from tqdm import tqdm
 import polars as pl
@@ -22,6 +24,13 @@ except Exception:  # pragma: no cover - optional runtime dep
     requests = None
     BeautifulSoup = None
 
+# Optional LLM dependency
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -30,6 +39,157 @@ from ml.ingestion.script import fetch_news, fetch_news_batched
 from ml.utils.embedding_labeling import classify_article_embedding
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
+
+logger = logging.getLogger(__name__)
+
+
+def classify_articles_batch_with_llm(
+    articles: list,
+    llm_call_count: dict = None,
+    max_llm_calls: int = None,
+) -> dict:
+    """
+    Use LLM to verify and correct multiple articles in a single batch call.
+    
+    Args:
+        articles: List of {title, description, signals, detected_count} dicts
+        llm_call_count: Dict tracking {'calls': N} for cost control
+        max_llm_calls: Maximum LLM API calls allowed
+        
+    Returns:
+        Dict mapping article index to corrected signals
+    """
+    if llm_call_count is None:
+        llm_call_count = {'calls': 0}
+    
+    if max_llm_calls is not None and llm_call_count['calls'] >= max_llm_calls:
+        logger.warning(f"LLM API limit reached ({max_llm_calls} calls). Returning uncorrected signals.")
+        return {i: article["signals"] for i, article in enumerate(articles)}
+    
+    if not articles:
+        return {}
+    
+    # Increment call counter
+    llm_call_count['calls'] += 1
+    
+    try:
+        from openai import OpenAI
+        
+        # Build batch prompt with all articles
+        articles_text = ""
+        for i, article in enumerate(articles):
+            title = article["title"]
+            desc = article["description"][:500]  # Truncate to 500 chars
+            signals = article["signals"]
+            
+            current_signals = {}
+            for cat in SIGNAL_CATEGORIES:
+                if cat in signals:
+                    score, tag = signals[cat]
+                    if abs(score) > 0.01:
+                        current_signals[cat] = {"score": float(score), "tag": str(tag)}
+            
+            articles_text += f"""
+ARTICLE {i+1}:
+Title: {title}
+Description: {desc}...
+Current Classifications: {json.dumps(current_signals) if current_signals else '(no signals)'}
+---"""
+        
+        prompt = f"""Analyze these {len(articles)} news articles and verify all signal detections.
+
+{articles_text}
+
+Signal Categories:
+- emergencies: natural disasters, accidents, extreme weather impacts (score: -1 to -0.5 for severe)
+- crime: criminal incidents, violence, arrests (score: -1 to -0.5 for serious)
+- festivals: cultural events, celebrations, entertainment (score: 0.3 to 1 for positive)
+- transportation: traffic accidents, transit issues (score: -0.5 to 0 for problems)
+- weather_temp: temperature extremes, heat waves, cold snaps (score: -0.8 to 0)
+- weather_wet: rain, flooding, snow, storms (score: -0.8 to 0)
+- sports: sporting events, competitions, achievements (score: -0.5 to 1)
+- economics: markets, business, employment (score: -0.8 to 1)
+- politics: elections, policy, governance (score: -0.5 to 1)
+
+For each article:
+1. Does each detected category make sense?
+2. Is the score magnitude correct? (major events: -0.8 to -1 or 0.8 to 1; minor: -0.3 to 0 or 0.3)
+3. Is the direction correct? (negative=bad/problem, positive=good/success)
+4. Are any signals completely wrong?
+5. Are any major signals missed?
+
+Return ONLY valid JSON (one object per article):
+{{
+  "results": [
+    {{
+      "article": 1,
+      "corrections": {{"category": {{"score": -0.8, "tag": "tag"}}, ...}},
+      "removals": ["wrong_category", ...],
+      "additions": {{"category": {{"score": 0.7, "tag": "tag"}}, ...}}
+    }},
+    ...
+  ]
+}}
+
+If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals": [], "additions": {{}}}}"""
+
+        client = openai.OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        logger.debug(f"LLM batch verification #{llm_call_count['calls']}: {len(articles)} articles")
+        
+        # Parse response
+        result = json.loads(result_text)
+        batch_corrections = {}
+        
+        for item in result.get("results", []):
+            article_idx = item.get("article", 1) - 1  # Convert to 0-indexed
+            
+            if article_idx < len(articles):
+                article = articles[article_idx]
+                verified_signals = article["signals"].copy()
+                
+                # Apply corrections
+                for category, correction in item.get("corrections", {}).items():
+                    if category in verified_signals:
+                        new_score = correction.get("score", verified_signals[category][0])
+                        new_tag = correction.get("tag", verified_signals[category][1])
+                        verified_signals[category] = (float(new_score), str(new_tag))
+                        logger.debug(f"  Article {article_idx+1} → Corrected {category}")
+                
+                # Apply removals
+                for category in item.get("removals", []):
+                    if category in verified_signals:
+                        verified_signals[category] = (0.0, "")
+                        logger.debug(f"  Article {article_idx+1} → Removed {category}")
+                
+                # Apply additions
+                for category, signal_info in item.get("additions", {}).items():
+                    if category not in verified_signals or abs(verified_signals[category][0]) < 0.01:
+                        score = signal_info.get("score", 0.5)
+                        tag = signal_info.get("tag", category)
+                        verified_signals[category] = (float(score), str(tag))
+                        logger.debug(f"  Article {article_idx+1} → Added {category}")
+                
+                batch_corrections[article_idx] = verified_signals
+        
+        # Fill in missing articles (no corrections)
+        for i in range(len(articles)):
+            if i not in batch_corrections:
+                batch_corrections[i] = articles[i]["signals"]
+        
+        return batch_corrections
+        
+    except Exception as e:
+        logger.warning(f"LLM batch verification failed: {e}")
+        return {i: article["signals"] for i, article in enumerate(articles)}
+
 
 def fetch_and_label(
     country: str = "sweden",
@@ -42,7 +202,7 @@ def fetch_and_label(
     max_llm_calls: int = None,
 ) -> pl.DataFrame:
     """
-    Fetch articles and auto-label them.
+    Fetch articles and auto-label them with optional batch LLM verification.
     
     Args:
         country: Country code (sweden, us, etc.)
@@ -50,18 +210,17 @@ def fetch_and_label(
         method: "embedding" or "keywords"
         similarity_threshold: Minimum similarity for embedding method
         auto_calibrate: If True, automatically convert similarity to intensity
-        fetch_body: If True, fetch article body from URL when description is missing (slower, may add noise)
-        llm_verify: If True, use LLM to verify and correct classifications (selective usage)
+        fetch_body: If True, fetch article body from URL when description is missing
+        llm_verify: If True, use LLM to verify and correct classifications (batch processing)
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         
     Returns:
         Labeled DataFrame
     """
-    # Set default API limit if not specified
+    # Set default API limit
     if llm_verify and max_llm_calls is None:
-        max_llm_calls = 50  # Default safe limit (~$0.10)
+        max_llm_calls = 50
     
-    # Track API usage
     llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
     
@@ -87,76 +246,101 @@ def fetch_and_label(
         if auto_calibrate:
             print("   (with automatic intensity calibration)")
         if llm_verify:
-            print(f"   (LLM verification: selective (0 or >2 signals), max {max_llm_calls} calls)")
+            print(f"   (LLM verification: batch processing, max {max_llm_calls} batch calls)")
     else:
         print("🔤 Auto-labeling with keyword-based classification...")
     
-    labeled_rows = []
+    # Phase 1: Classify all articles
+    print("\n📊 Phase 1: Embedding-based classification...")
+    all_articles = []
+    articles_needing_verification = []
     
-    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Labeling"):
+    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Classifying"):
         title = row.get("title", "")
-        # Prefer detailed text if available; some GDELT responses omit description
         description = (
             row.get("description")
             or row.get("content")
             or row.get("summary")
             or ""
         )
-        tone = row.get("tone")
-        # Optionally fetch body from source URL if description is missing
+        
         if not description and fetch_body:
             fetched_body = _fetch_page_content(row.get("url", ""))
             if fetched_body:
                 description = fetched_body
         
-        # Classify based on method
+        signals = {}
         if method == "embedding":
             try:
                 signals = classify_article_embedding(
                     title=title,
                     description=description,
                     similarity_threshold=similarity_threshold,
-                    relative_threshold=0.70  # Only keep signals within 70% of max confidence
+                    relative_threshold=0.70
                 )
                 
-                # Automatically calibrate intensity from similarity scores
                 if auto_calibrate:
                     signals = calibrate_article_labels(
                         signals=signals,
                         title=title,
                         description=description
                     )
-                
-                # Optional LLM verification (selective: 0 or >2 signals only)
-                if llm_verify:
-                    signals = classify_article_with_llm_verification(
-                        title=title,
-                        description=description,
-                        embedding_signals=signals,
-                        llm_call_count=llm_call_count,
-                        max_llm_calls=max_llm_calls,
-                    )
             except Exception as e:
                 print(f"\n⚠️  Embedding failed: {e}")
-                print("   Falling back to keywords...")
                 method = "keywords"
-                signals = {}
         
         if method == "keywords":
             from ml.ingestion.hopsworks_pipeline import classify_article
             signals = classify_article(title, description, method="keywords")
         
-        # Build labeled row
-        labeled_row = {
+        # Check if needs LLM verification
+        detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
+        needs_verification = llm_verify and (detected_count == 0 or detected_count > 2)
+        
+        article_data = {
+            "row": row,
             "title": title,
             "description": description,
+            "signals": signals,
+            "detected_count": detected_count,
+        }
+        
+        all_articles.append(article_data)
+        
+        if needs_verification:
+            articles_needing_verification.append(article_data)
+    
+    # Phase 2: Batch LLM verification
+    if articles_needing_verification:
+        print(f"\n🤖 Phase 2: LLM batch verification ({len(articles_needing_verification)} articles)...")
+        batch_results = classify_articles_batch_with_llm(
+            articles=articles_needing_verification,
+            llm_call_count=llm_call_count,
+            max_llm_calls=max_llm_calls,
+        )
+        
+        # Apply batch results back
+        for article_idx, corrected_signals in batch_results.items():
+            articles_needing_verification[article_idx]["signals"] = corrected_signals
+    
+    # Phase 3: Build output
+    print("\n📝 Building output...")
+    labeled_rows = []
+    
+    for article_data in tqdm(all_articles, desc="Building rows"):
+        row = article_data["row"]
+        signals = article_data["signals"]
+        tone = row.get("tone")
+        
+        labeled_row = {
+            "title": row.get("title", ""),
+            "description": row.get("description", ""),
             "tone": float(tone) if tone is not None else None,
             "url": row.get("url", ""),
             "source": row.get("source", ""),
             "date": str(row.get("date", "")),
         }
         
-        # Add category scores and tags
         for category in SIGNAL_CATEGORIES:
             if category in signals:
                 score, tag = signals[category]
@@ -171,10 +355,10 @@ def fetch_and_label(
     labeled_df = pl.DataFrame(labeled_rows)
     print(f"\n✓ Labeled {len(labeled_df)} articles")
     
-    # Show API usage if LLM was used
+    # Show API usage
     if llm_verify and llm_call_count['calls'] > 0:
-        estimated_cost = llm_call_count['calls'] * 0.002  # ~$0.002 per call
-        print(f"📊 LLM API Usage: {llm_call_count['calls']} calls (estimated cost: ${estimated_cost:.2f})")
+        estimated_cost = llm_call_count['calls'] * 0.05  # ~$0.05 per batch call
+        print(f"📊 LLM API Usage: {llm_call_count['calls']} batch call(s) (estimated cost: ${estimated_cost:.2f})")
     
     return labeled_df
 
@@ -182,8 +366,6 @@ def fetch_and_label(
 def _fetch_page_content(url: str) -> str:
     """
     Best-effort fetch of article body, filtering out navigation and boilerplate.
-    
-    Prioritizes common article content tags and removes navigation/menu elements.
     """
     if not url or requests is None or BeautifulSoup is None:
         return ""
@@ -194,179 +376,30 @@ def _fetch_page_content(url: str) -> str:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # Remove navigation, ads, and boilerplate elements
-        for tag in soup([
-            "script", "style", "noscript", 
-            "nav", "header", "footer", "aside",
-            "iframe", "form", "button"
-        ]):
+        for tag in soup(["script", "style", "noscript", "nav", "header", "footer", "aside", "iframe", "form", "button"]):
             tag.decompose()
         
-        # Remove common navigation/menu class patterns
         for pattern in ["nav", "menu", "sidebar", "footer", "header", "ad", "banner", "cookie"]:
             for elem in soup.find_all(class_=lambda x: x and pattern in x.lower()):
                 elem.decompose()
             for elem in soup.find_all(id=lambda x: x and pattern in x.lower()):
                 elem.decompose()
         
-        # Try to find main article content (prioritize semantic tags)
         article_content = None
         for selector in ["article", "main", '[role="main"]', ".article-body", ".post-content"]:
             article_content = soup.select_one(selector)
             if article_content:
                 break
         
-        # If found specific article container, use it; otherwise use body
         text_source = article_content if article_content else soup.body
         if text_source:
             text = text_source.get_text(separator=" ", strip=True)
-            # Clean up excessive whitespace
             text = " ".join(text.split())
-            # Keep reasonable length (first 1500 chars to focus on article start)
             return text[:1500]
         
         return ""
     except Exception:
         return ""
-
-
-def classify_article_with_llm_verification(
-    title: str,
-    description: str,
-    embedding_signals: dict,
-    llm_call_count: dict = None,
-    max_llm_calls: int = None,
-) -> dict:
-    """
-    Use LLM to verify and correct article classifications (selective usage).
-    
-    Args:
-        title: Article title
-        description: Article description
-        embedding_signals: Dict of {category: (score, tag)} from embedding classification
-        llm_call_count: Dict tracking {'calls': N} for cost control
-        max_llm_calls: Maximum LLM API calls allowed (None = unlimited)
-        
-    Returns:
-        Updated signals dict with LLM corrections (scores, tags, and categories)
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Count detected signals (those with non-zero scores)
-    detected_count = sum(1 for cat, (score, tag) in embedding_signals.items() if abs(score) > 0.01)
-    
-    # Only use LLM for edge cases: no signals (0) or too many signals (>2)
-    should_verify = detected_count == 0 or detected_count > 2
-    
-    if not should_verify:
-        # 1-2 signals: embedding is usually reliable, skip LLM
-        return embedding_signals
-    
-    # Check API usage limit
-    if llm_call_count is None:
-        llm_call_count = {'calls': 0}
-    
-    if max_llm_calls is not None and llm_call_count['calls'] >= max_llm_calls:
-        logger.warning(f"LLM API limit reached ({max_llm_calls} calls). Skipping verification.")
-        return embedding_signals
-    
-    # Increment counter
-    llm_call_count['calls'] += 1
-    
-    try:
-        from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
-        import json
-        from openai import OpenAI
-        
-        # Build current classification summary
-        current_detections = {}
-        for category in SIGNAL_CATEGORIES:
-            if category in embedding_signals:
-                score, tag = embedding_signals[category]
-                current_detections[category] = {"score": float(score), "tag": str(tag)}
-        
-        # Create prompt for LLM
-        prompt = f"""Analyze this news article and verify the signal detections with scores.
-
-Article Title: {title}
-Description: {description}
-
-Current Embedding-Based Classifications:
-{json.dumps(current_detections, indent=2)}
-
-Signal Categories to consider:
-- emergencies: natural disasters, accidents, extreme weather impacts (score: -1 to -0.5 for severe, -0.3 to 0 for minor)
-- crime: criminal incidents, violence, arrests (score: -1 to -0.5 for serious, -0.3 to 0 for minor)
-- festivals: cultural events, celebrations, entertainment (score: 0.3 to 1 for positive events)
-- transportation: traffic, accidents, transit issues, infrastructure (score: -0.5 to 0 for problems, 0.3+ for improvements)
-- weather_temp: temperature extremes, heat waves, cold snaps (score: -0.8 to 0 for extremes)
-- weather_wet: rain, flooding, snow, storms (score: -0.8 to 0 for severe, -0.3 to 0 for minor)
-- sports: sporting events, competitions, athletic achievements (score: -0.5 to 0 for disappointments, 0.3 to 1 for successes)
-- economics: markets, business, employment, inflation, trade (score: -0.8 to 0 for downturns, 0.3 to 1 for growth)
-- politics: elections, policy, governance, political events (score: -0.5 to 0 for negative, 0.3 to 1 for positive)
-
-For each detected signal:
-1. Does the category make sense for this article?
-2. Is the score magnitude reasonable? (closer to -1/1 for major events, closer to 0 for minor)
-3. Is the direction correct? (negative for problems/bad news, positive for good news/achievements)
-
-Identify any signals that should be:
-- Removed (wrong category detected)
-- Corrected with different score (wrong magnitude/direction)
-- Added (missed signals)
-
-Return ONLY valid JSON (no markdown, no explanation):
-{{
-  "corrections": {{"category_name": {{"score": -0.7, "tag": "corrected_tag"}}, ...}},
-  "removals": ["category_name", ...],
-  "additions": {{"category_name": {{"score": 0.8, "tag": "new_tag"}}, ...}}
-}}
-
-If no changes needed, return: {{"corrections": {{}}, "removals": [], "additions": {{}}}}"""
-
-        client = OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=600,
-        )
-        
-        result_text = response.choices[0].message.content.strip()
-        logger.debug(f"LLM verification #{llm_call_count['calls']}: {detected_count} signals detected")
-        
-        # Parse response
-        result = json.loads(result_text)
-        verified_signals = embedding_signals.copy()
-        
-        # Apply corrections (update both scores and tags)
-        for category, correction in result.get("corrections", {}).items():
-            if category in verified_signals:
-                new_score = correction.get("score", verified_signals[category][0])
-                new_tag = correction.get("tag", verified_signals[category][1])
-                verified_signals[category] = (float(new_score), str(new_tag))
-                logger.debug(f"  → Corrected {category}: {verified_signals[category]}")
-        
-        # Remove signals that LLM thinks are wrong
-        for category in result.get("removals", []):
-            if category in verified_signals:
-                verified_signals[category] = (0.0, "")
-                logger.debug(f"  → Removed {category}")
-        
-        # Add any new detections with LLM-provided scores
-        for category, signal_info in result.get("additions", {}).items():
-            if category not in verified_signals or abs(verified_signals[category][0]) < 0.01:
-                score = signal_info.get("score", 0.5)
-                tag = signal_info.get("tag", category)
-                verified_signals[category] = (float(score), str(tag))
-                logger.debug(f"  → Added {category}: ({score}, {tag})")
-        
-        return verified_signals
-        
-    except Exception as e:
-        logger.warning(f"LLM verification failed: {e}")
-        return embedding_signals
 
 
 def show_label_statistics(df: pl.DataFrame):
@@ -379,16 +412,12 @@ def show_label_statistics(df: pl.DataFrame):
     
     print("\nSignal distribution:")
     for category in SIGNAL_CATEGORIES:
-        # Count articles with significant signal (positive OR negative impact)
         non_zero = df.filter(pl.col(f"{category}_score").abs() > 0.01).height
         percentage = (non_zero / len(df)) * 100 if len(df) > 0 else 0
         
-        avg_score = 0
         scores = df[f"{category}_score"].to_list()
-        # Include both positive and negative scores
         non_zero_scores = [s for s in scores if abs(s) > 0.01]
-        if non_zero_scores:
-            avg_score = sum(non_zero_scores) / len(non_zero_scores)
+        avg_score = sum(non_zero_scores) / len(non_zero_scores) if non_zero_scores else 0
         
         print(f"  {category:20s}: {non_zero:4d} ({percentage:5.1f}%) | avg score: {avg_score:.3f}")
     
@@ -410,29 +439,16 @@ def split_train_val(
     train_ratio: float = 0.8,
     output_dir: str = "data"
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """
-    Split dataset into train and validation sets.
-    
-    Args:
-        df: Labeled DataFrame
-        train_ratio: Ratio of training data (0-1)
-        output_dir: Directory to save files
-        
-    Returns:
-        (train_df, val_df)
-    """
+    """Split dataset into train and validation sets."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Shuffle
     df_shuffled = df.sample(fraction=1.0, shuffle=True, seed=42)
     
-    # Split
     train_size = int(len(df_shuffled) * train_ratio)
     train_df = df_shuffled[:train_size]
     val_df = df_shuffled[train_size:]
     
-    # Save
     train_path = output_path / "train.parquet"
     val_path = output_path / "val.parquet"
     
@@ -446,71 +462,22 @@ def split_train_val(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Label GDELT articles for BERT fine-tuning"
-    )
-    parser.add_argument(
-        "--articles",
-        type=int,
-        default=500,
-        help="Number of articles to fetch (default: 500)"
-    )
-    parser.add_argument(
-        "--country",
-        type=str,
-        default="sweden",
-        help="Country to fetch from (default: sweden)"
-    )
-    parser.add_argument(
-        "--method",
-        type=str,
-        choices=["embedding", "keywords"],
-        default="embedding",
-        help="Labeling method (default: embedding)"
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=0.20,
-        help="Similarity threshold for embedding method (default: 0.20)"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="data",
-        help="Output directory (default: data/)"
-    )
-    parser.add_argument(
-        "--no-split",
-        action="store_true",
-        help="Don't split into train/val, just save labeled dataset"
-    )
-    parser.add_argument(
-        "--no-calibrate",
-        action="store_true",
-        help="Disable automatic intensity calibration (use raw similarity scores)"
-    )
-    parser.add_argument(
-        "--fetch-body",
-        action="store_true",
-        help="Fetch article body from URLs when description is missing (slower, may add noise)"
-    )
-    parser.add_argument(
-        "--llm-verify",
-        action="store_true",
-        help="Enable LLM verification for signal corrections (selective: 0 or >2 signals only)"
-    )
-    parser.add_argument(
-        "--max-llm-calls",
-        type=int,
-        default=50,
-        help="Maximum LLM API calls allowed (default: 50, set 0 for unlimited)"
-    )
+    parser = argparse.ArgumentParser(description="Label GDELT articles for BERT fine-tuning")
+    parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch (default: 500)")
+    parser.add_argument("--country", type=str, default="sweden", help="Country to fetch from (default: sweden)")
+    parser.add_argument("--method", type=str, choices=["embedding", "keywords"], default="embedding", help="Labeling method (default: embedding)")
+    parser.add_argument("--threshold", type=float, default=0.20, help="Similarity threshold (default: 0.20)")
+    parser.add_argument("--output", type=str, default="data", help="Output directory (default: data/)")
+    parser.add_argument("--no-split", action="store_true", help="Don't split into train/val")
+    parser.add_argument("--no-calibrate", action="store_true", help="Disable automatic intensity calibration")
+    parser.add_argument("--fetch-body", action="store_true", help="Fetch article body from URLs")
+    parser.add_argument("--llm-verify", action="store_true", help="Enable LLM verification (batch processing)")
+    parser.add_argument("--max-llm-calls", type=int, default=50, help="Maximum LLM batch calls (default: 50)")
     
     args = parser.parse_args()
     
     print("="*80)
-    print("GDELT TRAINING DATA LABELING")
+    print("GDELT TRAINING DATA LABELING (BATCH LLM)")
     print("="*80)
     print(f"Country:         {args.country}")
     print(f"Articles:        {args.articles}")
@@ -518,6 +485,11 @@ def main():
     if args.method == "embedding":
         print(f"Threshold:       {args.threshold}")
         print(f"Auto-calibrate:  {not args.no_calibrate}")
+    if args.llm_verify:
+        max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
+        print(f"LLM verification: enabled (batch, max {max_calls} calls)")
+    else:
+        print(f"LLM verification: disabled")
     print(f"Output:          {args.output}")
     print("="*80 + "\n")
     
@@ -551,7 +523,7 @@ def main():
     print("\n" + "="*80)
     print("NEXT STEPS")
     print("="*80)
-    print("\n1. Review labels (especially low-confidence ones):")
+    print("\n1. Review labels:")
     print(f"   python ml/utils/review_labels.py --input {output_path / 'train.parquet'}")
     print("\n2. Train the model:")
     print(f"   python ml/models/quick_finetune.py \\")
