@@ -60,11 +60,16 @@ class NewsSignalClassifierInference:
         bert = AutoModel.from_pretrained(base_model)
         hidden_size = 768
 
-        # Score heads
+        # Score heads (must match quick_finetune.py architecture exactly)
         score_heads = nn.ModuleDict({
             cat: nn.Sequential(
-                nn.Linear(hidden_size, 128),
+                nn.Linear(hidden_size, 256),
                 nn.ReLU(),
+                nn.LayerNorm(256),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.LayerNorm(128),
                 nn.Dropout(0.1),
                 nn.Linear(128, 1),
                 nn.Tanh()
@@ -72,11 +77,16 @@ class NewsSignalClassifierInference:
             for cat in SIGNAL_CATEGORIES
         })
 
-        # Tag heads
+        # Tag heads (must match quick_finetune.py architecture exactly)
         tag_heads = nn.ModuleDict({
             cat: nn.Sequential(
-                nn.Linear(hidden_size, 128),
+                nn.Linear(hidden_size, 256),
                 nn.ReLU(),
+                nn.LayerNorm(256),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.LayerNorm(128),
                 nn.Dropout(0.1),
                 nn.Linear(128, len(TAG_VOCAB[cat]))
             )
