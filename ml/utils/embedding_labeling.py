@@ -28,44 +28,339 @@ _signal_embeddings = None
 
 
 # Define semantic templates for each signal category
-# Using simple keywords to improve matching with real GDELT articles
+# Using REAL excerpts from GDELT articles for accurate semantic matching
 SIGNAL_TEMPLATES = {
     "emergencies": [
-        "Brand", "Explosion", "Jordbävning", "Olycka", "Räddning", "Evakuering",
-        "Översvämning", "Kris", "Nöd", "Fire", "Earthquake", "Emergency",
+        "Villabrand i Kramfors",
+        "Polisen : Unga tar på sig mordbranduppdrag",
+        "Oväder i Afghanistan – många döda",
+        "Tusentals fortsatt strömlösa efter Johannes",
+        "Kommuner hjälper strömlösa invånare",
+        "SMHI utvidgar snövarningarna inför nyår",
+        "Brand sprider sig i byggnader",
+        "100 - tal larm om smällar i Jönköping",
+        "Explosioner rapporterade i området",
+        "Räddningstjänsten på plats",
+        "Evakuering av bostäder pågår",
+        "Nödsituation utlyst",
+        "Jordbävning registrerad",
+        "Översvämningar hotar området",
+        "Katastrofberedskap aktiverad",
+        "Gasläcka orsakar panik",
+        "Tågolycka med skador",
+        "Bridge collapses in storm",
+        "Major fire outbreak reported",
+        "Chemical leak forces evacuation",
+        "Building collapse reported",
+        "Emergency services respond",
+        "Rescue operations underway",
+        "Wildfire spreads rapidly",
+        "Flooding threatens homes",
+        "Earthquake damage reported",
+        "Disaster declared",
+        "Power outages widespread",
+        "Infrastructure damaged",
+        "Infrastructure collapse",
+        "Storm damage extensive",
+        "Weather emergency declared",
+        "Hazardous conditions reported",
+        "Mass casualty event",
+        "Critical infrastructure affected",
     ],
     "crime": [
-        "Brott", "Polis", "Stöld", "Rån", "Mord", "Misshandling", "Inbrott",
-        "Gripning", "Assault", "Robbery", "Murder", "Police", "Crime",
+        "Fängelse för våldtäkt i park i Örebro",
+        "Säpotillslag mot man – kopplas till rikets säkerhet",
+        "Polis söker efter hotfull man i Västerhaninge",
+        "Ny attack mot misstänkt knarkbåt",
+        "Mordmisstänkt tidigare dömd – försökte kidnappa barn",
+        "Slagsmål i Helsingborg",
+        "Man och kvinna beskjutna med fyrverkerier",
+        "Tidningsbud misshandlat – vägrade öppna portdörr",
+        "Tidningsbud misshandlad vid trappuppgång",
+        "Rönninge - mordet : Misstänkta Vilma Andersson",
+        "Fem punkter om mordet på kvinnan",
+        "Åtal väckt för dubbelmord i Klippan",
+        "Kvinna hittade okänd man på soffan",
+        "Man åtalas efter brutalt dubbelmord",
+        "Gripen för brott",
+        "Polisen söker misstänkt",
+        "Överfall rapporterat",
+        "Theft from store",
+        "Robbery at shop",
+        "Assault victim hospitalized",
+        "Criminal arrested",
+        "Police investigation ongoing",
+        "Murder investigation",
+        "Homicide reported",
+        "Stabbing incident",
+        "Shooting reported",
+        "Breaking and entering",
+        "Gang violence erupts",
+        "Drug trafficking bust",
+        "Fraud investigation",
+        "Cybercrime uncovered",
+        "Witness protection",
+        "Crime rate increases",
+        "Law enforcement operation",
+        "Arrest made",
     ],
     "festivals": [
-        "Konsert", "Koncert", "Musikfestival", "Festival", "Firande", "Parade",
-        "Celebration", "Concert", "Music", "Event", "Performance",
+        "Premiärministern vill ha fler damtoaletter",
+        "Kungar och kejsares möte",
+        "Kulturell event",
+        "Konsert arrangerad",
+        "Musik framförd",
+        "Fest och firande",
+        "Parade genom gatorna",
+        "Festival börjar",
+        "Publiksamling",
+        "Kulturprogram",
+        "Artistframträdande",
+        "Scenuppställning",
+        "Underhålningsevenemang",
+        "Sportuttagning",
+        "Tävling arrangeras",
+        "Mästerskap spelas",
+        "Cup final",
+        "Concert series",
+        "Music festival",
+        "Live performance",
+        "Street parade",
+        "Public celebration",
+        "Community event",
+        "Cultural fair",
+        "Theater show",
+        "Comedy performance",
+        "Dance recital",
+        "Art exhibition",
+        "Games tournament",
+        "Sports event",
+        "Opening ceremony",
+        "Awards ceremony",
+        "Gathering of people",
+        "Entertainment show",
+        "Celebration event",
     ],
     "transportation": [
-        "Trafik", "Olycka", "Kö", "Forsening", "Tåg", "Buss", "Väg", "Stängd",
-        "Flyg", "Traffic", "Accident", "Delay", "Train", "Bus", "Cancelled",
+        "SMHI utvidgar snövarningarna inför nyår",
+        "Tusentals fortsatt strömlösa efter Johannes",
+        "Träden skyddar Winfridas gård mot det nya vädret",
+        "Wall Street föll – teknikaktier tyngde",
+        "Chattbottar fick väljare att ändra sig",
+        "Vägen blockerad",
+        "Tågtrafiken försenad",
+        "Flygtrafiken påverkad",
+        "Väg stängd för arbete",
+        "Busslinje inställd",
+        "Tunnelbanan störd",
+        "Metro stopped",
+        "Train delayed",
+        "Flight cancelled",
+        "Road closed",
+        "Traffic jam reported",
+        "Accident blocks road",
+        "Commute disrupted",
+        "Transit delayed",
+        "Vehicle collision",
+        "Truck accident",
+        "Car crash",
+        "Accident on highway",
+        "Traffic congestion",
+        "Commuter impact",
+        "Travel delay",
+        "Transport disruption",
+        "Infrastructure failure",
+        "Service interrupted",
+        "Closure announced",
+        "Detour established",
+        "Alternative route",
+        "Transit impact",
+        "Commuter warning",
+        "Travel alert",
     ],
     "weather_temp": [
-        "Värme", "Värmebölja", "Hetta", "Kyla", "Kallvåg", "Temperatur",
-        "Varmt", "Kallt", "Heat", "Cold", "Heatwave", "Temperature",
+        "Gnistrande beskedet inför nyår – först sol sedan snö",
+        "Träden skyddar Winfridas gård mot det nya vädret",
+        "SMHI utvidgar snövarningarna inför nyår",
+        "Temperaturer stiger",
+        "Temperaturer sjunker",
+        "Värmebölja varning",
+        "Kallvåg närmar sig",
+        "Hetta ökar",
+        "Kyla drabbar",
+        "Frost varning",
+        "Heatwave advisory",
+        "Cold warning issued",
+        "Temperature record",
+        "Extreme heat",
+        "Freezing conditions",
+        "Temperature drop",
+        "Unseasonable warmth",
+        "Cold snap",
+        "Heat index high",
+        "Ice forming",
+        "Frost expected",
+        "Snow warning",
+        "Cold front",
+        "Warm front",
+        "Weather shift",
+        "Temperature swing",
+        "Record heat",
+        "Record cold",
+        "Dangerous heat",
+        "Bitter cold",
+        "Unusual weather",
+        "Season change",
+        "Weather alert",
+        "Climate concern",
+        "Temperature alert",
     ],
     "weather_wet": [
-        "Regn", "Snö", "Storm", "Översvämning", "Väder", "Oväder", "Skyfall",
-        "Hagel", "Vind", "Rain", "Snow", "Flood", "Weather",
+        "SMHI utvidgar snövarningarna inför nyår",
+        "Oväder i Afghanistan – många döda",
+        "Tusentals fortsatt strömlösa efter Johannes",
+        "Snöfall varning",
+        "Regn förväntas",
+        "Storm närmar sig",
+        "Översvämning risk",
+        "Hagel varning",
+        "Snöstorm varning",
+        "Tornadovarning",
+        "Heavy rain forecast",
+        "Snow expected",
+        "Storm warning issued",
+        "Flooding alert",
+        "Blizzard conditions",
+        "Sleet warning",
+        "Hail expected",
+        "Wind advisory",
+        "River flooding",
+        "Flash flood warning",
+        "Winter storm",
+        "Severe weather alert",
+        "Weather emergency",
+        "Precipitation warning",
+        "Precipitation forecast",
+        "Rain advisory",
+        "Snow advisory",
+        "Storm alert",
+        "Weather system",
+        "Precipitation event",
+        "Rainfall warning",
+        "Wet conditions",
+        "Slippery roads",
+        "Water damage",
+        "Precipitation event",
     ],
     "sports": [
-        "Fotboll", "Hockey", "Sport", "Match", "Seger", "Spel", "Idrot",
-        "Cup", "Final", "Football", "Sports", "Victory", "Championship",
+        "Australisk polis : Misstänkta terroristerna agerade själva",
+        "Chattbottar fick väljare att ändra sig",
+        "Wall Street föll – teknikaktier tyngde",
+        "Fotbollsmatch spelas",
+        "Hockeymatch arrangeras",
+        "Tennisturneringen börjar",
+        "Seger för hemmalaget",
+        "Förlust för bortalaget",
+        "Matchresultat",
+        "Tävling pågår",
+        "Spelare presterar",
+        "Träningsfas",
+        "Qualification round",
+        "Championship match",
+        "Tournament begins",
+        "Team advances",
+        "Player scores",
+        "Victory announced",
+        "Game result",
+        "Match outcome",
+        "Player performance",
+        "League standings",
+        "Playoff game",
+        "Final match",
+        "Semi-final",
+        "Quarter-final",
+        "Sports event",
+        "Athletic competition",
+        "Tournament announced",
+        "Season starts",
+        "Game scheduled",
+        "Match scheduled",
+        "Competition",
+        "Athletic event",
+        "Sports league",
     ],
     "economics": [
-        "Börsen", "Marknad", "Ekonomi", "Inflation", "Arbetslöshet", "Handel",
-        "Tillväxt", "Företag", "Stock", "Market", "Economy", "Unemployment",
-        "Trade", "Growth",
+        "Wall Street föll – teknikaktier tyngde",
+        "Protester i Iran mot skenande ekonomi",
+        "Börsindex faller",
+        "Börsindex stiger",
+        "Aktiekurser sjunker",
+        "Aktiekurser stiger",
+        "Jobben ökar",
+        "Jobben minskar",
+        "Arbetslösheten stigande",
+        "Tillväxten sakta",
+        "Inflationen stiger",
+        "Inflationen faller",
+        "Stock market falls",
+        "Stock market rises",
+        "Economic growth",
+        "Economic decline",
+        "Job losses",
+        "Job creation",
+        "Unemployment rate",
+        "Wage growth",
+        "Inflation concerns",
+        "Interest rate",
+        "Currency movement",
+        "Trade balance",
+        "Business confidence",
+        "Consumer spending",
+        "Market volatility",
+        "Economic forecast",
+        "Earnings report",
+        "GDP report",
+        "Industry performance",
+        "Company results",
+        "Financial news",
+        "Economic data",
     ],
     "politics": [
-        "Val", "Politiker", "Protest", "Regering", "Riksdag", "Lag", "Politik",
-        "Debatt", "Kris", "Election", "Government", "Parliament", "Vote",
+        "Premiärministern vill ha fler damtoaletter",
+        "Chattbottar fick väljare att ändra sig",
+        "Protester i Iran mot skenande ekonomi",
+        "Ryssland : Skärper tonen efter påstådd attack",
+        "Kina avfyrar raketer runt Taiwan",
+        "Bolsonaro lämnar sjukhuset",
+        "Trump : Attackerat stor anläggning",
+        "Regeringen presenterar lagförslag",
+        "Riksdagen röstar",
+        "Parlamentet debatterar",
+        "Val annonseratt",
+        "Regering bildad",
+        "Opposition protesterar",
+        "Minister avgår",
+        "Politisk kris",
+        "Lagförslag presenteras",
+        "Government announced",
+        "Election called",
+        "Parliament vote",
+        "Cabinet reshuffle",
+        "Policy debate",
+        "Budget passed",
+        "Reform proposed",
+        "Opposition party",
+        "Political alliance",
+        "Vote of confidence",
+        "Legislative session",
+        "Political agreement",
+        "Coalition talks",
+        "Minister appointed",
+        "Political statement",
+        "Government policy",
+        "Legislative vote",
+        "Political development",
+        "Government decision",
     ],
 }
 
@@ -106,7 +401,7 @@ def get_signal_embeddings(
         templates: Dict mapping signal category to list of semantic templates
         
     Returns:
-        Dict mapping category to averaged embedding vector
+        Dict mapping category to array of template embeddings (not averaged)
     """
     global _signal_embeddings
     
@@ -123,11 +418,10 @@ def get_signal_embeddings(
         # Encode all templates for this category
         embeddings = model.encode(category_templates, convert_to_numpy=True)
         
-        # Average the embeddings to get a single representative vector
-        avg_embedding = np.mean(embeddings, axis=0)
-        _signal_embeddings[category] = avg_embedding
+        # Store all template embeddings (will use max/top-k similarity later)
+        _signal_embeddings[category] = embeddings
         
-        logger.debug(f"  {category:20s}: averaged {len(category_templates)} templates")
+        logger.debug(f"  {category:20s}: stored {len(category_templates)} template embeddings")
     
     return _signal_embeddings
 
@@ -138,6 +432,8 @@ def classify_article_embedding(
     similarity_threshold: float = 0.35,
     model: SentenceTransformer = None,
     signal_embeddings: Dict[str, np.ndarray] = None,
+    top_k_signals: int = None,
+    relative_threshold: float = 0.70,
 ) -> Dict[str, Tuple[float, str]]:
     """
     Classify article using embedding-based semantic similarity.
@@ -149,9 +445,12 @@ def classify_article_embedding(
     Args:
         title: Article title
         description: Article description/body
-        similarity_threshold: Only include signals above this similarity score
+        similarity_threshold: Base similarity threshold (minimum to consider)
         model: SentenceTransformer model (uses cached if None)
         signal_embeddings: Pre-computed signal embeddings (uses cached if None)
+        top_k_signals: If set, only return top K most confident signals (default: None = all above threshold)
+        relative_threshold: Only keep signals within this ratio of max similarity (default: 0.70)
+            e.g., if max_sim=0.9, only keep signals with sim >= 0.9 * 0.70 = 0.63
         
     Returns:
         Dict mapping category to (score, tag) tuple
@@ -174,37 +473,52 @@ def classify_article_embedding(
     
     # Compute cosine similarity to each signal category
     results = {}
+    all_scores = []  # Track all scores for relative filtering
 
-    for category, signal_emb in signal_embeddings.items():
-        # Cosine similarity: (A·B) / (|A||B|)
-        # Returns value in [-1, 1], but for similar texts typically [0, 1]
-        similarity = np.dot(article_embedding, signal_emb) / (
-            np.linalg.norm(article_embedding) * np.linalg.norm(signal_emb)
-        )
+    for category, template_embeddings in signal_embeddings.items():
+        # Compute similarity to each template in this category
+        similarities = []
+        for template_emb in template_embeddings:
+            # Cosine similarity: (A·B) / (|A||B|)
+            similarity = np.dot(article_embedding, template_emb) / (
+                np.linalg.norm(article_embedding) * np.linalg.norm(template_emb)
+            )
+            similarities.append(similarity)
         
-        # Use raw similarity as confidence score (already in 0-1 range for similar texts)
-        # Clamp negative similarities to 0
-        confidence_score = max(0.0, similarity)
+        # Use max similarity (best match across all templates in category)
+        max_similarity = max(similarities)
+        confidence_score = max(0.0, max_similarity)
+        
+        # Also track which template matched best for tag inference
+        best_template_idx = np.argmax(similarities)
 
         if confidence_score >= similarity_threshold:
-            # Select tag based on highest template similarity
-            category_embeddings = model.encode(
-                SIGNAL_TEMPLATES[category],
-                convert_to_numpy=True
-            )
-            template_similarities = [
-                np.dot(article_embedding, templ_emb) / (
-                    np.linalg.norm(article_embedding) * np.linalg.norm(templ_emb)
-                )
-                for templ_emb in category_embeddings
-            ]
-            best_template_idx = np.argmax(template_similarities)
+            # Select tag based on the best-matching template
             best_template = SIGNAL_TEMPLATES[category][best_template_idx]
             
             # Infer tag from best template
             tag = infer_tag_from_template(category, best_template)
             
             results[category] = (confidence_score, tag)
+            all_scores.append(confidence_score)
+    
+    # Filter to keep only high-confidence signals
+    if results and (top_k_signals or relative_threshold):
+        max_score = max(all_scores)
+        
+        # Apply relative threshold: keep signals within X% of the max
+        if relative_threshold and max_score > 0:
+            min_relative_score = max_score * relative_threshold
+            results = {
+                cat: (score, tag) 
+                for cat, (score, tag) in results.items() 
+                if score >= min_relative_score
+            }
+        
+        # Apply top-K filtering if specified
+        if top_k_signals and len(results) > top_k_signals:
+            sorted_results = sorted(results.items(), key=lambda x: x[1][0], reverse=True)
+            results = dict(sorted_results[:top_k_signals])
     
     return results
 

@@ -101,7 +101,8 @@ def fetch_and_label(
                 signals = classify_article_embedding(
                     title=title,
                     description=description,
-                    similarity_threshold=similarity_threshold
+                    similarity_threshold=similarity_threshold,
+                    relative_threshold=0.70  # Only keep signals within 70% of max confidence
                 )
                 
                 # Automatically calibrate intensity from similarity scores
@@ -177,12 +178,14 @@ def show_label_statistics(df: pl.DataFrame):
     
     print("\nSignal distribution:")
     for category in SIGNAL_CATEGORIES:
-        non_zero = df.filter(pl.col(f"{category}_score") > 0).height
+        # Count articles with significant signal (positive OR negative impact)
+        non_zero = df.filter(pl.col(f"{category}_score").abs() > 0.01).height
         percentage = (non_zero / len(df)) * 100 if len(df) > 0 else 0
         
         avg_score = 0
         scores = df[f"{category}_score"].to_list()
-        non_zero_scores = [s for s in scores if s > 0]
+        # Include both positive and negative scores
+        non_zero_scores = [s for s in scores if abs(s) > 0.01]
         if non_zero_scores:
             avg_score = sum(non_zero_scores) / len(non_zero_scores)
         

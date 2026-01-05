@@ -83,18 +83,19 @@ def review_labels(
         print(f"📝 Description: {desc}")
         print(f"🔗 Source: {row['source']}")
         
-        # Show detected signals
+        # Show detected signals (both positive and negative impact)
         detected_signals = []
         for category in SIGNAL_CATEGORIES:
             score = row[f"{category}_score"]
             tag = row[f"{category}_tag"]
-            if score > 0:
+            if abs(score) > 0.01:  # Count both positive and negative scores
                 detected_signals.append((category, score, tag))
         
         print(f"\n🎯 Detected signals:")
         if detected_signals:
             for category, score, tag in detected_signals:
-                print(f"   • {category:20s}: {score:5.3f} (tag: '{tag}')")
+                impact = "📈 positive" if score > 0 else "📉 negative"
+                print(f"   • {category:20s}: {score:+6.3f} ({impact}, tag: '{tag}')")
         else:
             print("   (no signals detected)")
         
