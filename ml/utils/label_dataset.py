@@ -37,6 +37,7 @@ def fetch_and_label(
     method: str = "embedding",
     similarity_threshold: float = 0.20,
     auto_calibrate: bool = True,
+    fetch_body: bool = False,
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them.
@@ -47,6 +48,7 @@ def fetch_and_label(
         method: "embedding" or "keywords"
         similarity_threshold: Minimum similarity for embedding method
         auto_calibrate: If True, automatically convert similarity to intensity
+        fetch_body: If True, fetch article body from URL when description is missing (slower, may add noise)
         
     Returns:
         Labeled DataFrame
@@ -89,8 +91,8 @@ def fetch_and_label(
             or ""
         )
         tone = row.get("tone")
-        # If description is empty, try fetching from source URL
-        if not description:
+        # Optionally fetch body from source URL if description is missing
+        if not description and fetch_body:
             fetched_body = _fetch_page_content(row.get("url", ""))
             if fetched_body:
                 description = fetched_body
@@ -151,19 +153,52 @@ def fetch_and_label(
 
 
 def _fetch_page_content(url: str) -> str:
-    """Best-effort fetch of article body for richer descriptions."""
+    """
+    Best-effort fetch of article body, filtering out navigation and boilerplate.
+    
+    Prioritizes common article content tags and removes navigation/menu elements.
+    """
     if not url or requests is None or BeautifulSoup is None:
         return ""
     try:
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=5, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; NewsBot/1.0)'
+        })
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Remove scripts/styles
-        for tag in soup(["script", "style", "noscript"]):
+        
+        # Remove navigation, ads, and boilerplate elements
+        for tag in soup([
+            "script", "style", "noscript", 
+            "nav", "header", "footer", "aside",
+            "iframe", "form", "button"
+        ]):
             tag.decompose()
-        text = soup.get_text(separator=" ", strip=True)
-        # Keep a reasonable length
-        return text[:2000]
+        
+        # Remove common navigation/menu class patterns
+        for pattern in ["nav", "menu", "sidebar", "footer", "header", "ad", "banner", "cookie"]:
+            for elem in soup.find_all(class_=lambda x: x and pattern in x.lower()):
+                elem.decompose()
+            for elem in soup.find_all(id=lambda x: x and pattern in x.lower()):
+                elem.decompose()
+        
+        # Try to find main article content (prioritize semantic tags)
+        article_content = None
+        for selector in ["article", "main", '[role="main"]', ".article-body", ".post-content"]:
+            article_content = soup.select_one(selector)
+            if article_content:
+                break
+        
+        # If found specific article container, use it; otherwise use body
+        text_source = article_content if article_content else soup.body
+        if text_source:
+            text = text_source.get_text(separator=" ", strip=True)
+            # Clean up excessive whitespace
+            text = " ".join(text.split())
+            # Keep reasonable length (first 1500 chars to focus on article start)
+            return text[:1500]
+        
+        return ""
     except Exception:
         return ""
 
@@ -289,6 +324,11 @@ def main():
         action="store_true",
         help="Disable automatic intensity calibration (use raw similarity scores)"
     )
+    parser.add_argument(
+        "--fetch-body",
+        action="store_true",
+        help="Fetch article body from URLs when description is missing (slower, may add noise)"
+    )
     
     args = parser.parse_args()
     
@@ -311,6 +351,7 @@ def main():
         method=args.method,
         similarity_threshold=args.threshold,
         auto_calibrate=not args.no_calibrate,
+        fetch_body=args.fetch_body,
     )
     
     # Show statistics
