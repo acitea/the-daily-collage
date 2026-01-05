@@ -28,79 +28,44 @@ _signal_embeddings = None
 
 
 # Define semantic templates for each signal category
-# These are diverse examples that capture the semantic space of each signal
+# Using simple keywords to improve matching with real GDELT articles
 SIGNAL_TEMPLATES = {
     "emergencies": [
-        "En stor brand utbröt i centrum",
-        "Jordbävningen orsakade omfattande skador",
-        "Explosionen evakuerade hela området",
-        "Nödsituation med många skadade",
-        "Räddningstjänsten rycker ut till olycka",
-        "Katastrofberedskap aktiverad",
+        "Brand", "Explosion", "Jordbävning", "Olycka", "Räddning", "Evakuering",
+        "Översvämning", "Kris", "Nöd", "Fire", "Earthquake", "Emergency",
     ],
     "crime": [
-        "Rån på bensinstation i nackan",
-        "Polisen söker misstänkt mördare",
-        "Stöld från varuhuset anmäld",
-        "Misshandling på torget sent på kvällen",
-        "Inbrott i privatbostaden på natten",
-        "Brottsplats spärrad av polis",
+        "Brott", "Polis", "Stöld", "Rån", "Mord", "Misshandling", "Inbrott",
+        "Gripning", "Assault", "Robbery", "Murder", "Police", "Crime",
     ],
     "festivals": [
-        "Konserthändelsen lockar tusentals besökare",
-        "Firande på gatan med musik och dans",
-        "Festivalen börjar nästa vecka",
-        "Världscupen attraktion för fans",
-        "Kulturell manifestation påbörjas",
-        "Fest och firande på torget",
+        "Konsert", "Koncert", "Musikfestival", "Festival", "Firande", "Parade",
+        "Celebration", "Concert", "Music", "Event", "Performance",
     ],
     "transportation": [
-        "Trafikstörning orsakar långa köer",
-        "Trafikolycka på motorvägen",
-        "Tung lastbil försenar kollektivtrafiken",
-        "Vägen är stängd för reparation",
-        "Gränsöverväxlingen orsakar försinkningar",
-        "Busshållplatsen fylld av väntande passagerare",
+        "Trafik", "Olycka", "Kö", "Forsening", "Tåg", "Buss", "Väg", "Stängd",
+        "Flyg", "Traffic", "Accident", "Delay", "Train", "Bus", "Cancelled",
     ],
     "weather_temp": [
-        "Värmebölja slår värmerekord",
-        "Temperaturerna stiger till extrema nivåer",
-        "Kallvågorna kommer att påverka regionen",
-        "Frysande väder på väg",
-        "Hettan blir outhärdlig i städerna",
-        "Kylan skapar problem på vägen",
+        "Värme", "Värmebölja", "Hetta", "Kyla", "Kallvåg", "Temperatur",
+        "Varmt", "Kallt", "Heat", "Cold", "Heatwave", "Temperature",
     ],
     "weather_wet": [
-        "Kraftiga regn orsakar översvämningar",
-        "Snöstormen lamslår trafiken",
-        "Översvämningen hotar husen",
-        "Skyfall och blixt på väg",
-        "Snön täcker hela landet",
-        "Blötregn under hela dagen",
+        "Regn", "Snö", "Storm", "Översvämning", "Väder", "Oväder", "Skyfall",
+        "Hagel", "Vind", "Rain", "Snow", "Flood", "Weather",
     ],
     "sports": [
-        "Fotbollslaget vinner matchen",
-        "Hockeymästerskapet avgörs i dag",
-        "Idrottscupfinalen lockar folkmassa",
-        "Segeröl kommer att flyta",
-        "Landslaget spelar viktigt derbyn",
-        "Atleterna tävlar om guldet",
+        "Fotboll", "Hockey", "Sport", "Match", "Seger", "Spel", "Idrot",
+        "Cup", "Final", "Football", "Sports", "Victory", "Championship",
     ],
     "economics": [
-        "Börsen stiger på goda nyheter",
-        "Arbetslösheten ökar i landet",
-        "Företagen rapporterar svagt resultat",
-        "Handel ökar mellan länderna",
-        "Inflation påverkar konsumenternas köpkraft",
-        "Marknaden väntar på centralbankens beslut",
+        "Börsen", "Marknad", "Ekonomi", "Inflation", "Arbetslöshet", "Handel",
+        "Tillväxt", "Företag", "Stock", "Market", "Economy", "Unemployment",
+        "Trade", "Growth",
     ],
     "politics": [
-        "Regeringen presenterar ny politik",
-        "Valet är närmare än någonsin",
-        "Protester mot regeringspolitiken",
-        "Parlamentet debatterar ny lag",
-        "Oppositionen critiserar regeringen",
-        "Politiska förhandlingar pågår",
+        "Val", "Politiker", "Protest", "Regering", "Riksdag", "Lag", "Politik",
+        "Debatt", "Kris", "Election", "Government", "Parliament", "Vote",
     ],
 }
 
@@ -209,7 +174,7 @@ def classify_article_embedding(
     
     # Compute cosine similarity to each signal category
     results = {}
-    
+
     for category, signal_emb in signal_embeddings.items():
         # Cosine similarity: (A·B) / (|A||B|)
         # Returns value in [-1, 1], but for similar texts typically [0, 1]
@@ -220,7 +185,7 @@ def classify_article_embedding(
         # Use raw similarity as confidence score (already in 0-1 range for similar texts)
         # Clamp negative similarities to 0
         confidence_score = max(0.0, similarity)
-        
+
         if confidence_score >= similarity_threshold:
             # Select tag based on highest template similarity
             category_embeddings = model.encode(
@@ -263,10 +228,13 @@ def infer_tag_from_template(category: str, template: str) -> str:
     TAG_KEYWORDS = {
         "emergencies": {
             "brand": "fire",
+            "fire": "fire",
             "explosion": "explosion",
             "earthquake": "earthquake",
             "evacuation": "evacuation",
             "olycka": "accident",
+            "flood": "flood",
+            "storm": "storm",
         },
         "crime": {
             "rån": "robbery",
@@ -275,12 +243,19 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "mord": "assault",
             "inbrott": "theft",
             "polis": "police",
+            "robbery": "robbery",
+            "burglary": "theft",
+            "assault": "assault",
+            "vandalism": "vandalism",
         },
         "festivals": {
             "konsert": "concert",
             "firande": "celebration",
             "fest": "celebration",
             "mästerskap": "event",
+            "concert": "concert",
+            "festival": "event",
+            "parade": "celebration",
         },
         "transportation": {
             "trafik": "traffic",
@@ -288,6 +263,11 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "kö": "congestion",
             "stängd": "closure",
             "vägen": "closure",
+            "traffic": "traffic",
+            "accident": "accident",
+            "delay": "delay",
+            "closure": "closure",
+            "cancelled": "delay",
         },
         "weather_temp": {
             "varme": "hot",
@@ -295,6 +275,9 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "kylan": "cold",
             "frysande": "cold",
             "temperatur": "hot",
+            "heat": "hot",
+            "heatwave": "hot",
+            "cold": "cold",
         },
         "weather_wet": {
             "regn": "rain",
@@ -303,6 +286,10 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "skyfall": "rain",
             "blöt": "rain",
             "storm": "rain",
+            "rain": "rain",
+            "snow": "snow",
+            "flood": "flood",
+            "hail": "rain",
         },
         "sports": {
             "fotboll": "football",
@@ -311,6 +298,10 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "vinna": "victory",
             "match": "football",
             "tävl": "event",
+            "football": "football",
+            "hockey": "hockey",
+            "victory": "victory",
+            "championship": "championship",
         },
         "economics": {
             "börsen": "market",
@@ -319,6 +310,11 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "företag": "business",
             "inflation": "inflation",
             "handel": "trade",
+            "market": "market",
+            "inflation": "inflation",
+            "unemployment": "employment",
+            "growth": "growth",
+            "recession": "inflation",
         },
         "politics": {
             "val": "election",
@@ -327,6 +323,11 @@ def infer_tag_from_template(category: str, template: str) -> str:
             "parlament": "government",
             "lag": "policy",
             "politiker": "government",
+            "election": "election",
+            "protest": "protest",
+            "government": "government",
+            "parliament": "government",
+            "strike": "protest",
         },
     }
     
