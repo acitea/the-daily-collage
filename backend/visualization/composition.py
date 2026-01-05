@@ -63,6 +63,9 @@ class HybridComposer:
             api_host=settings.stability_ai.api_host,
             engine_id=settings.stability_ai.model_id,
             image_strength=settings.stability_ai.image_strength,
+            cfg_scale=settings.stability_ai.cfg_scale,
+            style_preset=settings.stability_ai.style_preset,
+            sampler=settings.stability_ai.sampler,
             timeout=settings.stability_ai.timeout_seconds,
         )
 
@@ -117,23 +120,25 @@ class HybridComposer:
             signals
         )
 
-        # Build base prompt
+        # Build base prompt: instruct AI to reimagine the scene incorporating concepts
+        tag_strings = [signal.tag.value for signal in signals if abs(signal.score) > 0.1]
         base_prompt = (
-            "A colorful sticker scrapbook collage, "
-            f"{location}, playful cartoon stickers, "
-            "vibrant colors, whimsical illustration style"
+            f"Reimagine this cityscape of {location} as a vibrant cartoon scene. "
+            f"Incorporate these visual elements naturally into the scenery: {', '.join(tag_strings)}. "
+            "Paint these concepts directly into the landscape and cityscape. "
+            "Cohesive illustrated scene, integrated composition, whimsical cartoon style, unified artistic rendering."
         )
 
         # Combine with atmosphere
         final_prompt = base_prompt
         if atmosphere_positive:
-            final_prompt = f"{base_prompt}, {atmosphere_positive}"
+            final_prompt = f"{base_prompt} {atmosphere_positive}"
             logger.debug(f"Using atmosphere: {atmosphere_positive}")
 
-        # Build negative prompt
+        # Build negative prompt (avoid collage aesthetic, want integrated scene)
         base_negative = (
-            "blurry, low quality, distorted, moved objects, photorealistic, "
-            "realistic, 3d render, photograph"
+            "blurry, low quality, distorted, photorealistic, realistic, 3d render, photograph, "
+            "stickers, cutouts, collage, pasted elements, separated layers, paper scraps"
         )
         final_negative = base_negative
         if atmosphere_negative:

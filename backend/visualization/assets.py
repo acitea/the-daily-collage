@@ -45,12 +45,12 @@ class AssetLibrary:
         ("transportation", "negative", "med"): "transportation_negative_med.png",
         ("transportation", "negative", "high"): "transportation_negative_high.png",
         # Crime
-        ("crime", "positive", "low"): "crime_positive_low.png",
-        ("crime", "positive", "med"): "crime_positive_med.png",
-        ("crime", "positive", "high"): "crime_positive_high.png",
-        ("crime", "negative", "low"): "crime_negative_low.png",
-        ("crime", "negative", "med"): "crime_negative_med.png",
-        ("crime", "negative", "high"): "crime_negative_high.png",
+        ("crime", "positive", "low"): "crime_negative_low.png",
+        ("crime", "positive", "med"): "crime_negative_med.png",
+        ("crime", "positive", "high"): "crime_negative_high.png",
+        ("crime", "negative", "low"): "crime_positive_low.png",
+        ("crime", "negative", "med"): "crime_positive_med.png",
+        ("crime", "negative", "high"): "crime_positive_high.png",
         # Festivals
         ("festivals", "positive", "low"): "festivals_positive_low.png",
         ("festivals", "positive", "med"): "festivals_positive_med.png",
@@ -80,12 +80,12 @@ class AssetLibrary:
         ("politics", "negative", "med"): "politics_negative_med.png",
         ("politics", "negative", "high"): "politics_negative_high.png",
         # Emergencies
-        ("emergencies", "positive", "low"): "emergencies_positive_low.png",
-        ("emergencies", "positive", "med"): "emergencies_positive_med.png",
-        ("emergencies", "positive", "high"): "emergencies_positive_high.png",
-        ("emergencies", "negative", "low"): "emergencies_negative_low.png",
-        ("emergencies", "negative", "med"): "emergencies_negative_med.png",
-        ("emergencies", "negative", "high"): "emergencies_negative_high.png",
+        ("emergencies", "positive", "low"): "emergency_negative_low.png",
+        ("emergencies", "positive", "med"): "emergency_negative_med.png",
+        ("emergencies", "positive", "high"): "emergency_negative_high.png",
+        ("emergencies", "negative", "low"): "emergency_positive_low.png",
+        ("emergencies", "negative", "med"): "emergency_positive_med.png",
+        ("emergencies", "negative", "high"): "emergency_positive_high.png",
     }
     
     # Generic fallbacks by category and intensity level
@@ -109,9 +109,9 @@ class AssetLibrary:
         ("politics", "low"): "politics_generic_low.png",
         ("politics", "med"): "politics_generic_med.png",
         ("politics", "high"): "politics_generic_high.png",
-        ("emergencies", "low"): "emergencies_generic_low.png",
-        ("emergencies", "med"): "emergencies_generic_med.png",
-        ("emergencies", "high"): "emergencies_generic_high.png",
+        ("emergencies", "low"): "emergency_generic_low.png",
+        ("emergencies", "med"): "emergency_generic_med.png",
+        ("emergencies", "high"): "emergency_generic_high.png",
     }
 
     # Ultimate fallback
@@ -175,6 +175,7 @@ class AssetLibrary:
         filename = self.ASSET_MAP.get(asset_key)
 
         if not filename and use_fallback:
+            logger.warning(f"Asset not found for {asset_key}, trying fallback generic")
             # Fall back to generic tag with same intensity level
             fallback_key = (category.value, intensity_level.value)
             filename = self.CATEGORY_INTENSITY_FALLBACK.get(fallback_key)
@@ -369,6 +370,8 @@ class ZoneLayoutComposer:
     ) -> None:
         """
         Place signals within a zone using randomized grid-based placement.
+        
+        Ensures each cell is used only once to prevent overlapping assets.
 
         Args:
             image: PIL Image to draw on
@@ -397,6 +400,10 @@ class ZoneLayoutComposer:
         # Shuffle for randomness
         random.shuffle(available_cells)
         
+        # Track used cells to prevent reuse
+        used_cells = set()
+        high_intensity_cells = set()  # Track high intensity asset locations for fallback placement
+        
         # Ensure we have enough cells
         if len(signals) > len(available_cells):
             logger.warning(
@@ -404,14 +411,66 @@ class ZoneLayoutComposer:
                 f"Some signals may overlap."
             )
 
-        for idx, signal in enumerate(signals):
-            if idx >= len(available_cells):
-                logger.warning(f"Ran out of cells in zone {zone_name}, skipping signal {signal.category.value}/{signal.tag.value}")
-                break
+        placed_count = 0
+        for signal in signals:
+            # For high intensity signals, only select from top row cells
+            if signal.intensity == IntensityLevel.HIGH:
+                top_cells = [(col, row) for col, row in available_cells 
+                            if row == 0 and (col, row) not in used_cells]
+                cell_assigned = False
+                if top_cells:
+                    col, row = top_cells[0]
+                    used_cells.add((col, row))
+                    cell_assigned = True
+                    available_cells.remove((col, row))
+            else:
+                # Find next available unused cell for normal intensity
+                cell_assigned = False
+                for col, row in available_cells:
+                    if (col, row) not in used_cells:
+                        used_cells.add((col, row))
+                        cell_assigned = True
+                        break
+            
+            # If no normal cell found, try fallback placement around high intensity assets
+            if not cell_assigned and high_intensity_cells:
+                # Create fallback cells: 1 unit radius around high intensity assets
+                fallback_cells = set()
+                for hi_col, hi_row in high_intensity_cells:
+                    for dc in [-1, 0, 1]:
+                        for dr in [-1, 0, 1]:
+                            fallback_col = hi_col + dc
+                            fallback_row = hi_row + dr
+                            if (0 <= fallback_col < self.GRID_COLS and 
+                                0 <= fallback_row < self.GRID_ROWS_PER_ZONE and
+                                (fallback_col, fallback_row) not in used_cells):
+                                fallback_cells.add((fallback_col, fallback_row))
                 
-            col, row = available_cells[idx]
+                if fallback_cells:
+                    col, row = random.choice(list(fallback_cells))
+                    used_cells.add((col, row))
+                    cell_assigned = True
+                    logger.debug(f"Placing {signal.category.value}/{signal.tag.value} in fallback zone around high intensity asset")
+            
+            if not cell_assigned:
+                logger.warning(f"No available cells in zone {zone_name}, skipping signal {signal.category.value}/{signal.tag.value}")
+                break
 
-            # Calculate cell center
+            # For high intensity signals, track and reserve 1-unit radius
+            if signal.intensity == IntensityLevel.HIGH:
+                # Track this high intensity cell for fallback placement
+                high_intensity_cells.add((col, row))
+                
+                # Reserve 1-unit radius (3x3 grid centered on this cell)
+                for dc in [-1, 0, 1]:
+                    for dr in [-1, 0, 1]:
+                        reserve_col = col + dc
+                        reserve_row = row + dr
+                        if (0 <= reserve_col < self.GRID_COLS and 
+                            0 <= reserve_row < self.GRID_ROWS_PER_ZONE):
+                            used_cells.add((reserve_col, reserve_row))
+
+            # Calculate cell center X and Y based on cell position
             cell_center_x = col * cell_width + cell_width // 2
             cell_center_y = zone_y_start + row * cell_height + cell_height // 2
             
@@ -427,10 +486,26 @@ class ZoneLayoutComposer:
             if not asset:
                 logger.debug(f"No asset for {signal.category.value}/{signal.tag.value}, skipping")
                 continue
+            else:
+                logger.debug(f"Placing asset for {signal.category.value}/{signal.tag.value} at cell ({col}, {row})")
 
+            # Resize asset to fit between 1x and 1.5x the entire zone height while preserving aspect ratio
+            # This creates size variation while keeping assets proportional to the entire zone
+            original_width, original_height = asset.size
+            if original_height > 0:
+                scale_factor = random.uniform(1.0, 1.5)
+                target_height = int(zone_height * scale_factor)
+                new_width = int(original_width * (target_height / original_height))
+                asset = asset.resize((new_width, target_height), Image.Resampling.LANCZOS)
+            
             # Place on canvas (centered at x, y)
+            # Ensure asset stays within horizontal bounds
             paste_x = max(0, min(x - asset.width // 2, self.image_width - asset.width))
+            
+            # Ensure asset stays within zone bounds AND doesn't clip below image bottom
             paste_y = max(zone_y_start, min(y - asset.height // 2, zone_y_end - asset.height))
+            paste_y = max(paste_y, 0)  # Don't clip above image
+            paste_y = min(paste_y, self.image_height - asset.height)  # Don't clip below image
 
             image.paste(asset, (paste_x, paste_y), asset)
 

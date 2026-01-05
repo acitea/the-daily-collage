@@ -1,0 +1,33 @@
+[project]
+name = "the-daily-collage"
+version = "0.1.0"
+description = "Real-time news visualization system transforming news signals into interactive cartoonish visualizations"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.124.2",
+    "uvicorn[standard]>=0.30.0",
+    "gdeltdoc",
+    "polars",
+    "pandas",
+    "pydantic>=2.0",
+    "gunicorn>=21.0",
+    "pillow>=10.0.0",
+    "tenacity>=8.0.0",
+    "hopsworks[python]>=4.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.25.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+where = [".."]

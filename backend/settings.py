@@ -31,16 +31,26 @@ class StabilityAISettings:
     )
 
     # Img2Img denoising strength (0-1, lower = more preserve layout)
-    image_strength: float = 0.35
+    # 0.75 allows AI to redraw scenery while preserving rough composition
+    image_strength: float = 0.75
+
+    # CFG Scale: How strongly to follow the prompt (7-15, higher = stricter adherence)
+    cfg_scale: float = 12.0
+
+    # Style preset for cartoonish vibes
+    style_preset: str = "comic-book"
+
+    # Sampler algorithm
+    sampler: str = "K_DPMPP_2M"
 
     # Model to use for polishing
     model_id: str = os.getenv(
-        "STABILITY_MODEL_ID", "stable-diffusion-v1-6-768-768"
+        "STABILITY_MODEL_ID", "stable-diffusion-xl-1024-v1-0"
     )
 
     # Enable polishing (can be disabled for testing)
     enable_polish: bool = os.getenv(
-        "STABILITY_ENABLE_POLISH", "true"
+        "STABILITY_ENABLE_POLISH", "false"
     ).lower() == "true"
 
     # Timeout for Stability API requests (seconds)
@@ -113,7 +123,7 @@ class AssetSettings:
 
     # Directory containing asset PNGs
     assets_dir: str = os.getenv(
-        "ASSETS_DIR", "./backend/assets"
+        "ASSETS_DIR", "./assets"
     )
 
 
@@ -126,9 +136,9 @@ class LayoutSettings:
     image_height: int = 768
 
     # Canvas zones (as fractions of height)
-    sky_zone_height: float = 0.25
-    city_zone_height: float = 0.50
-    street_zone_height: float = 0.25
+    sky_zone_height: float = 0.50
+    city_zone_height: float = 0.20
+    street_zone_height: float = 0.30
 
 @dataclass
 class APISettings:

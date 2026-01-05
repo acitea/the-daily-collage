@@ -37,6 +37,9 @@ class StabilityAIPoller:
         api_host: str = "https://api.stability.ai",
         engine_id: str = "stable-diffusion-xl-1024-v1-0",
         image_strength: float = 0.35,
+        cfg_scale: float = 12.0,
+        style_preset: str = "comic-book",
+        sampler: str = "K_DPMPP_2M",
         timeout: int = 60,
     ):
         """
@@ -47,12 +50,18 @@ class StabilityAIPoller:
             api_host: API endpoint host
             engine_id: Model/engine ID to use
             image_strength: Denoising strength (0-1, lower = preserve more)
+            cfg_scale: Prompt adherence (7-15, higher = follow prompt more strictly)
+            style_preset: Style preset (e.g., 'comic-book', 'digital-art')
+            sampler: Sampler algorithm (e.g., 'K_DPMPP_2M', 'K_EULER')
             timeout: Request timeout in seconds
         """
         self.api_key = api_key
         self.api_host = api_host
         self.engine_id = engine_id
         self.image_strength = image_strength
+        self.cfg_scale = cfg_scale
+        self.style_preset = style_preset
+        self.sampler = sampler
         self.timeout = timeout
 
     def polish(
@@ -99,13 +108,6 @@ class StabilityAIPoller:
             logger.info("Falling back to unpolished image")
             return image_data
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        retry=retry_if_exception_type((requests.Timeout, requests.ConnectionError)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
-    )
     def _call_stability_api(
         self,
         image_data: bytes,
@@ -127,8 +129,27 @@ class StabilityAIPoller:
             
         Raises:
             requests.Timeout: If request times out (will be retried)
-            requests.ConnectionError: If connection fails (will be retried)
+            requests.ConnectionError: If connecstion fails (will be retried)
         """
+        # Convert image format to JPEG and resize to Stability AI SDXL requirements
+        image = Image.open(io.BytesIO(image_data))
+        
+        # Resize to 1344x768 (required for stable-diffusion-xl models)
+        target_width, target_height = 1344, 768
+        image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        logger.info(f"Resized image to {target_width}x{target_height} for Stability AI SDXL")
+        
+        # Convert to RGB if needed (JPEG doesn't support transparency)
+        if image.mode in ("RGBA", "PA", "P"):
+            image = image.convert("RGB")
+        
+        # Re-encode to JPEG
+        optimized_bytes = io.BytesIO()
+        image.save(optimized_bytes, format="JPEG")
+        image_data = optimized_bytes.getvalue()
+        
+        logger.info(f"Converted image format for API: {len(image_data)} bytes")
+        
         # Use provided prompts or defaults
         if not prompt:
             prompt = (
@@ -148,19 +169,21 @@ class StabilityAIPoller:
 
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
 
         payload = {
             "image_strength": self.image_strength,
-            "text_prompts": [
-                {"text": prompt, "weight": 1.0},
-                {"text": negative_prompt, "weight": -1.0},
-            ],
-            "style_preset": "digital-art",
+            "init_image_mode": "IMAGE_STRENGTH",
+            "text_prompts[0][text]": prompt,
+            "text_prompts[0][weight]": 1.0,
+            "text_prompts[1][text]": negative_prompt,
+            "text_prompts[1][weight]": -1.0,
+            "style_preset": self.style_preset,
+            "sampler": self.sampler,
             "steps": 30,
-            "cfg_scale": 7.0,
+            "cfg_scale": self.cfg_scale,
+            "samples": 1,
         }
 
         logger.info(
@@ -173,7 +196,7 @@ class StabilityAIPoller:
             url,
             headers=headers,
             files={
-                "init_image": image_data  # image size 1344x768
+                "init_image": image_data
             },
             data=payload,
             timeout=self.timeout,
@@ -230,6 +253,9 @@ class MockStabilityAIPoller:
         )
         if prompt:
             logger.debug(f"Mock Polish prompt: {prompt}")
+        
+        if negative_prompt:
+            logger.debug(f"Mock Polish negative prompt: {negative_prompt}")
         return image_data
 
 
@@ -239,6 +265,9 @@ def create_poller(
     api_host: str = "https://api.stability.ai",
     engine_id: str = "stable-diffusion-xl-1024-v1-0",
     image_strength: float = 0.35,
+    cfg_scale: float = 12.0,
+    style_preset: str = "comic-book",
+    sampler: str = "K_DPMPP_2M",
     timeout: int = 60,
 ):
     """
@@ -250,6 +279,9 @@ def create_poller(
         api_host: API host
         engine_id: Engine/model ID
         image_strength: Denoising strength
+        cfg_scale: Prompt adherence strength
+        style_preset: Style preset for generation
+        sampler: Sampler algorithm
         timeout: Request timeout
 
     Returns:
@@ -265,5 +297,8 @@ def create_poller(
         api_host=api_host,
         engine_id=engine_id,
         image_strength=image_strength,
+        cfg_scale=cfg_scale,
+        style_preset=style_preset,
+        sampler=sampler,
         timeout=timeout,
     )

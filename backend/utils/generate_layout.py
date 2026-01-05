@@ -106,6 +106,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--all-samples",
+        action="store_true",
+        help="Generate layouts for all sample vibes",
+    )
+
+    parser.add_argument(
         "--output",
         type=str,
         help="Output JSON file (default: stdout)",
@@ -115,6 +121,13 @@ def parse_args():
         "--list-samples",
         action="store_true",
         help="List available sample vibes",
+    )
+
+    parser.add_argument(
+        "--image-output",
+        type=str,
+        default="tmp/daily_collage_layout.png",
+        help="Output path for the base compiled image (default: tmp/daily_collage_layout.png)",
     )
 
     return parser.parse_args()
@@ -156,18 +169,20 @@ def load_vibe_vector(args) -> dict:
     sys.exit(1)
 
 
-def generate_layout(city: str, vibe_vector: dict) -> dict:
-    """Generate layout and return as dict."""
+def generate_layout(city: str, vibe_vector: dict) -> tuple:
+    """Generate layout and return image data + metadata dict."""
+
+    # Create layout composer directly (skip polish by default)
+    # Determine assets directory path relative to project root
     composer = HybridComposer()
 
-    # Generate image and hitboxes
     image_data, hitboxes = composer.compose(vibe_vector, city)
 
     # Generate vibe hash
     timestamp = datetime.utcnow()
     vibe_hash = VibeHash.generate(city, timestamp)
 
-    # Build output
+    # Build output metadata
     output = {
         "metadata": {
             "city": city,
@@ -175,23 +190,68 @@ def generate_layout(city: str, vibe_vector: dict) -> dict:
             "timestamp": timestamp.isoformat(),
             "vibe_vector": vibe_vector,
         },
-        "layout": {
-            "image_width": 1024,
-            "image_height": 768,
-        },
-        "hitboxes": hitboxes,
+        "hitboxes": [hb.model_dump() for hb in hitboxes],
         "summary": {
             "total_hitboxes": len(hitboxes),
             "signals": list(vibe_vector.keys()),
         },
     }
 
-    return output
+    return image_data, output
 
 
 def main():
     """Main entry point."""
     args = parse_args()
+
+    # Handle generating all samples
+    if args.all_samples:
+        samples = generate_sample_vibes()
+        print(f"Generating layouts for all {len(samples)} samples...", file=sys.stderr)
+        
+        for sample_name, vibe_vector in samples.items():
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"Processing: {sample_name}", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
+            
+            # Generate filenames based on sample name
+            image_path = f"tmp/daily_collage_{sample_name}.png"
+            json_path = f"tmp/daily_collage_{sample_name}.json"
+            
+            print(f"Vibe vector: {json.dumps(vibe_vector, indent=2)}", file=sys.stderr)
+            
+            try:
+                image_data, output = generate_layout(args.city, vibe_vector)
+            except Exception as e:
+                print(f"Error generating layout for {sample_name}: {e}", file=sys.stderr)
+                import traceback
+                traceback.print_exc()
+                continue
+            
+            # Save image
+            try:
+                with open(image_path, "wb") as f:
+                    f.write(image_data)
+                print(f"✓ Image saved to {image_path}", file=sys.stderr)
+            except IOError as e:
+                print(f"Error saving image: {e}", file=sys.stderr)
+                continue
+            
+            # Save JSON
+            try:
+                with open(json_path, "w") as f:
+                    f.write(json.dumps(output, indent=2))
+                print(f"✓ JSON saved to {json_path}", file=sys.stderr)
+            except IOError as e:
+                print(f"Error saving JSON: {e}", file=sys.stderr)
+                continue
+            
+            print(f"  Hitboxes: {output['summary']['total_hitboxes']}", file=sys.stderr)
+        
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"✓ Generated all {len(samples)} samples", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+        return
 
     try:
         vibe_vector = load_vibe_vector(args)
@@ -203,11 +263,20 @@ def main():
     print(f"Vibe vector: {json.dumps(vibe_vector, indent=2)}", file=sys.stderr)
 
     try:
-        output = generate_layout(args.city, vibe_vector)
+        image_data, output = generate_layout(args.city, vibe_vector)
     except Exception as e:
         print(f"Error generating layout: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
+
+    # Save the compiled image
+    try:
+        with open(args.image_output, "wb") as f:
+            f.write(image_data)
+        print(f"✓ Base image saved to {args.image_output}", file=sys.stderr)
+    except IOError as e:
+        print(f"Error saving image: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Output result
@@ -226,6 +295,7 @@ def main():
 
     # Print summary
     print(f"\n✓ Generated layout for {args.city}", file=sys.stderr)
+    print(f"  Image: {args.image_output}", file=sys.stderr)
     print(f"  Vibe hash: {output['metadata']['vibe_hash']}", file=sys.stderr)
     print(f"  Hitboxes: {output['summary']['total_hitboxes']}", file=sys.stderr)
     print(f"  Signals: {', '.join(output['summary']['signals'])}", file=sys.stderr)

@@ -130,12 +130,13 @@ class AtmosphereDescriptor:
         max_temp_intensity = 0.0
 
         for signal in signals:
-            if signal.category == SignalCategory.WEATHER_WET and signal.intensity > max_wet_intensity:
+            intensity_value = abs(signal.score)
+            if signal.category == SignalCategory.WEATHER_WET and intensity_value > max_wet_intensity:
                 weather_wet_signal = signal
-                max_wet_intensity = signal.intensity
-            elif signal.category == SignalCategory.WEATHER_TEMP and signal.intensity > max_temp_intensity:
+                max_wet_intensity = intensity_value
+            elif signal.category == SignalCategory.WEATHER_TEMP and intensity_value > max_temp_intensity:
                 weather_temp_signal = signal
-                max_temp_intensity = signal.intensity
+                max_temp_intensity = intensity_value
 
         # Priority: weather_wet (rain/snow) overrides weather_temp
         if weather_wet_signal and max_wet_intensity > 0.3:
