@@ -1,3 +1,5 @@
+ml/models/checkpoints/*.pt
+ml/models/checkpoints/history.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
