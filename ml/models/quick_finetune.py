@@ -1,24 +1,6 @@
 """
 Quick fine-tuning script for one-day MVP.
 Streamlined, minimal configuration, production-ready.
-
-Model Architecture & Training Strategy:
-- SIGNAL STRENGTH PREDICTION: Each category produces a score (-1 to +1) representing
-  signal intensity/impact. For example:
-  * -0.9 → major negative event (e.g., large fire, serious crime)
-  * -0.5 → moderate negative event
-  * 0.0  → absent/irrelevant
-  * +0.5 → moderate positive event
-  * +0.9 → major positive event (e.g., major celebration)
-  
-- TAG CLASSIFICATION: Each category also predicts a specific tag describing the
-  type of event (e.g., "fire", "flood", "accident"). High-intensity signals
-  emphasize correct tag prediction during training.
-
-Loss Function: Intensity-weighted with emphasis on high-impact signals
-- Score prediction (MAE): weighted by |score|
-- Tag prediction: weighted by intensity, focusing on high-confidence signals
-- Combined: 60% intensity prediction, 40% event classification
 """
 
 import torch
@@ -53,7 +35,7 @@ logger.info(f"Using device: {DEVICE}")
 # Model config
 BASE_MODEL = "KB/bert-base-swedish-cased"
 MAX_LENGTH = 512
-BATCH_SIZE = 32 if torch.cuda.is_available() else 12
+BATCH_SIZE = 32 if torch.cuda.is_available() else 8
 NUM_EPOCHS = 3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
@@ -105,42 +87,30 @@ class QuickNewsDataset(Dataset):
 
 
 class QuickNewsClassifier(nn.Module):
-    """Multi-head classifier optimized for signal strength and category prediction."""
+    """Minimal multi-head classifier."""
 
     def __init__(self, base_model: str = BASE_MODEL):
         super().__init__()
         self.bert = AutoModel.from_pretrained(base_model)
         hidden_size = 768
 
-        # Score heads: Predict signal strength/intensity (-1.0 to 1.0)
-        # Higher capacity to better capture intensity gradations
+        # Score heads (regression)
         self.score_heads = nn.ModuleDict({
             cat: nn.Sequential(
-                nn.Linear(hidden_size, 256),
+                nn.Linear(hidden_size, 128),
                 nn.ReLU(),
-                nn.LayerNorm(256),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.LayerNorm(128),
                 nn.Dropout(0.1),
                 nn.Linear(128, 1),
-                nn.Tanh()  # Output in [-1, 1] range
+                nn.Tanh()
             )
             for cat in SIGNAL_CATEGORIES
         })
 
-        # Tag heads: Classify specific incident/signal type
-        # e.g., "minor_fire", "major_fire", "structure_fire"
+        # Tag heads (classification)
         self.tag_heads = nn.ModuleDict({
             cat: nn.Sequential(
-                nn.Linear(hidden_size, 256),
+                nn.Linear(hidden_size, 128),
                 nn.ReLU(),
-                nn.LayerNorm(256),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.LayerNorm(128),
                 nn.Dropout(0.1),
                 nn.Linear(128, len(TAG_VOCAB[cat]))
             )
@@ -153,9 +123,7 @@ class QuickNewsClassifier(nn.Module):
 
         results = {}
         for cat in SIGNAL_CATEGORIES:
-            # Score: signal strength/impact
             score = self.score_heads[cat](pooled).squeeze(-1)
-            # Tag: incident type/category
             tag_logits = self.tag_heads[cat](pooled)
             results[cat] = (score, tag_logits)
 
@@ -163,13 +131,13 @@ class QuickNewsClassifier(nn.Module):
 
 
 def train_epoch(model, loader, optimizer, device):
-    """Train one epoch with intensity-aware loss."""
+    """Train one epoch."""
     model.train()
     total_loss = 0.0
     
     pbar = tqdm(loader, desc="Training")
     mse_loss = nn.MSELoss()
-    ce_loss = nn.CrossEntropyLoss(reduction='none')
+    ce_loss = nn.CrossEntropyLoss()
 
     for batch in pbar:
         input_ids = batch['input_ids'].to(device)
@@ -185,23 +153,15 @@ def train_epoch(model, loader, optimizer, device):
         optimizer.zero_grad()
         predictions = model(input_ids, attention_mask)
 
-        # Compute loss with intensity weighting
+        # Compute loss
         loss = 0.0
         for cat in SIGNAL_CATEGORIES:
             pred_score, pred_tag = predictions[cat]
             true_score = labels[cat]['score']
             true_tag = labels[cat]['tag_idx']
 
-            # Intensity-weighted MSE: higher |score| means more important prediction
-            intensity_weight = torch.abs(true_score) + 0.5  # min weight 0.5
-            weighted_mse = mse_loss(pred_score, true_score) * intensity_weight
-            
-            # Tag classification with intensity weighting
-            tag_loss = ce_loss(pred_tag, true_tag)
-            weighted_tag_loss = tag_loss * intensity_weight
-            
-            # Combined loss: emphasize intensity signals
-            loss += 0.6 * weighted_mse.mean() + 0.4 * weighted_tag_loss.mean()
+            loss += 0.5 * mse_loss(pred_score, true_score)
+            loss += 0.5 * ce_loss(pred_tag, true_tag)
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -214,16 +174,12 @@ def train_epoch(model, loader, optimizer, device):
 
 
 def validate(model, loader, device):
-    """Validate model with intensity metrics."""
+    """Validate model."""
     model.eval()
     total_loss = 0.0
-    score_mae = 0.0  # Mean Absolute Error for intensity prediction
-    tag_accuracy = 0.0
-    intensity_predictions = []  # Track intensity predictions
     
     mse_loss = nn.MSELoss()
-    ce_loss = nn.CrossEntropyLoss(reduction='none')
-    total_samples = 0
+    ce_loss = nn.CrossEntropyLoss()
 
     with torch.no_grad():
         for batch in tqdm(loader, desc="Validating"):
@@ -238,8 +194,6 @@ def validate(model, loader, device):
             }
 
             predictions = model(input_ids, attention_mask)
-            batch_size = input_ids.shape[0]
-            total_samples += batch_size
 
             loss = 0.0
             for cat in SIGNAL_CATEGORIES:
@@ -247,33 +201,12 @@ def validate(model, loader, device):
                 true_score = labels[cat]['score']
                 true_tag = labels[cat]['tag_idx']
 
-                # Intensity-weighted loss
-                intensity_weight = torch.abs(true_score) + 0.5
-                weighted_mse = mse_loss(pred_score, true_score) * intensity_weight
-                tag_loss = ce_loss(pred_tag, true_tag)
-                weighted_tag_loss = tag_loss * intensity_weight
-                
-                loss += 0.6 * weighted_mse.mean() + 0.4 * weighted_tag_loss.mean()
-
-                # Intensity metrics: MAE for score prediction
-                score_mae += torch.abs(pred_score - true_score).sum().item()
-                
-                # Tag accuracy for high-intensity signals (|score| > 0.3)
-                high_intensity_mask = torch.abs(true_score) > 0.3
-                if high_intensity_mask.any():
-                    pred_tags = torch.argmax(pred_tag, dim=1)
-                    tag_acc = (pred_tags[high_intensity_mask] == true_tag[high_intensity_mask]).float().mean()
-                    tag_accuracy += tag_acc.item()
+                loss += 0.5 * mse_loss(pred_score, true_score)
+                loss += 0.5 * ce_loss(pred_tag, true_tag)
 
             total_loss += loss.item()
 
-    avg_loss = total_loss / len(loader)
-    avg_mae = score_mae / (total_samples * len(SIGNAL_CATEGORIES))
-    avg_tag_acc = tag_accuracy / (len(loader) * len(SIGNAL_CATEGORIES)) if tag_accuracy > 0 else 0.0
-    
-    logger.info(f"  Val MAE (Intensity): {avg_mae:.4f}, Tag Accuracy (High Intensity): {avg_tag_acc:.4f}")
-
-    return avg_loss
+    return total_loss / len(loader)
 
 
 def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/checkpoints"):
