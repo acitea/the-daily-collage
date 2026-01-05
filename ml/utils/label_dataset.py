@@ -38,6 +38,8 @@ def fetch_and_label(
     similarity_threshold: float = 0.20,
     auto_calibrate: bool = True,
     fetch_body: bool = False,
+    llm_verify: bool = False,
+    max_llm_calls: int = None,
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them.
@@ -49,10 +51,18 @@ def fetch_and_label(
         similarity_threshold: Minimum similarity for embedding method
         auto_calibrate: If True, automatically convert similarity to intensity
         fetch_body: If True, fetch article body from URL when description is missing (slower, may add noise)
+        llm_verify: If True, use LLM to verify and correct classifications (selective usage)
+        max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         
     Returns:
         Labeled DataFrame
     """
+    # Set default API limit if not specified
+    if llm_verify and max_llm_calls is None:
+        max_llm_calls = 50  # Default safe limit (~$0.10)
+    
+    # Track API usage
+    llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
     
     # Use batched fetching if more than 250 articles requested
@@ -76,6 +86,8 @@ def fetch_and_label(
         print(f"   (similarity threshold: {similarity_threshold})")
         if auto_calibrate:
             print("   (with automatic intensity calibration)")
+        if llm_verify:
+            print(f"   (LLM verification: selective (0 or >2 signals), max {max_llm_calls} calls)")
     else:
         print("🔤 Auto-labeling with keyword-based classification...")
     
@@ -114,6 +126,16 @@ def fetch_and_label(
                         title=title,
                         description=description
                     )
+                
+                # Optional LLM verification (selective: 0 or >2 signals only)
+                if llm_verify:
+                    signals = classify_article_with_llm_verification(
+                        title=title,
+                        description=description,
+                        embedding_signals=signals,
+                        llm_call_count=llm_call_count,
+                        max_llm_calls=max_llm_calls,
+                    )
             except Exception as e:
                 print(f"\n⚠️  Embedding failed: {e}")
                 print("   Falling back to keywords...")
@@ -148,6 +170,11 @@ def fetch_and_label(
     
     labeled_df = pl.DataFrame(labeled_rows)
     print(f"\n✓ Labeled {len(labeled_df)} articles")
+    
+    # Show API usage if LLM was used
+    if llm_verify and llm_call_count['calls'] > 0:
+        estimated_cost = llm_call_count['calls'] * 0.002  # ~$0.002 per call
+        print(f"📊 LLM API Usage: {llm_call_count['calls']} calls (estimated cost: ${estimated_cost:.2f})")
     
     return labeled_df
 
@@ -201,6 +228,145 @@ def _fetch_page_content(url: str) -> str:
         return ""
     except Exception:
         return ""
+
+
+def classify_article_with_llm_verification(
+    title: str,
+    description: str,
+    embedding_signals: dict,
+    llm_call_count: dict = None,
+    max_llm_calls: int = None,
+) -> dict:
+    """
+    Use LLM to verify and correct article classifications (selective usage).
+    
+    Args:
+        title: Article title
+        description: Article description
+        embedding_signals: Dict of {category: (score, tag)} from embedding classification
+        llm_call_count: Dict tracking {'calls': N} for cost control
+        max_llm_calls: Maximum LLM API calls allowed (None = unlimited)
+        
+    Returns:
+        Updated signals dict with LLM corrections (scores, tags, and categories)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Count detected signals (those with non-zero scores)
+    detected_count = sum(1 for cat, (score, tag) in embedding_signals.items() if abs(score) > 0.01)
+    
+    # Only use LLM for edge cases: no signals (0) or too many signals (>2)
+    should_verify = detected_count == 0 or detected_count > 2
+    
+    if not should_verify:
+        # 1-2 signals: embedding is usually reliable, skip LLM
+        return embedding_signals
+    
+    # Check API usage limit
+    if llm_call_count is None:
+        llm_call_count = {'calls': 0}
+    
+    if max_llm_calls is not None and llm_call_count['calls'] >= max_llm_calls:
+        logger.warning(f"LLM API limit reached ({max_llm_calls} calls). Skipping verification.")
+        return embedding_signals
+    
+    # Increment counter
+    llm_call_count['calls'] += 1
+    
+    try:
+        from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
+        import json
+        from openai import OpenAI
+        
+        # Build current classification summary
+        current_detections = {}
+        for category in SIGNAL_CATEGORIES:
+            if category in embedding_signals:
+                score, tag = embedding_signals[category]
+                current_detections[category] = {"score": float(score), "tag": str(tag)}
+        
+        # Create prompt for LLM
+        prompt = f"""Analyze this news article and verify the signal detections with scores.
+
+Article Title: {title}
+Description: {description}
+
+Current Embedding-Based Classifications:
+{json.dumps(current_detections, indent=2)}
+
+Signal Categories to consider:
+- emergencies: natural disasters, accidents, extreme weather impacts (score: -1 to -0.5 for severe, -0.3 to 0 for minor)
+- crime: criminal incidents, violence, arrests (score: -1 to -0.5 for serious, -0.3 to 0 for minor)
+- festivals: cultural events, celebrations, entertainment (score: 0.3 to 1 for positive events)
+- transportation: traffic, accidents, transit issues, infrastructure (score: -0.5 to 0 for problems, 0.3+ for improvements)
+- weather_temp: temperature extremes, heat waves, cold snaps (score: -0.8 to 0 for extremes)
+- weather_wet: rain, flooding, snow, storms (score: -0.8 to 0 for severe, -0.3 to 0 for minor)
+- sports: sporting events, competitions, athletic achievements (score: -0.5 to 0 for disappointments, 0.3 to 1 for successes)
+- economics: markets, business, employment, inflation, trade (score: -0.8 to 0 for downturns, 0.3 to 1 for growth)
+- politics: elections, policy, governance, political events (score: -0.5 to 0 for negative, 0.3 to 1 for positive)
+
+For each detected signal:
+1. Does the category make sense for this article?
+2. Is the score magnitude reasonable? (closer to -1/1 for major events, closer to 0 for minor)
+3. Is the direction correct? (negative for problems/bad news, positive for good news/achievements)
+
+Identify any signals that should be:
+- Removed (wrong category detected)
+- Corrected with different score (wrong magnitude/direction)
+- Added (missed signals)
+
+Return ONLY valid JSON (no markdown, no explanation):
+{{
+  "corrections": {{"category_name": {{"score": -0.7, "tag": "corrected_tag"}}, ...}},
+  "removals": ["category_name", ...],
+  "additions": {{"category_name": {{"score": 0.8, "tag": "new_tag"}}, ...}}
+}}
+
+If no changes needed, return: {{"corrections": {{}}, "removals": [], "additions": {{}}}}"""
+
+        client = OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=600,
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        logger.debug(f"LLM verification #{llm_call_count['calls']}: {detected_count} signals detected")
+        
+        # Parse response
+        result = json.loads(result_text)
+        verified_signals = embedding_signals.copy()
+        
+        # Apply corrections (update both scores and tags)
+        for category, correction in result.get("corrections", {}).items():
+            if category in verified_signals:
+                new_score = correction.get("score", verified_signals[category][0])
+                new_tag = correction.get("tag", verified_signals[category][1])
+                verified_signals[category] = (float(new_score), str(new_tag))
+                logger.debug(f"  → Corrected {category}: {verified_signals[category]}")
+        
+        # Remove signals that LLM thinks are wrong
+        for category in result.get("removals", []):
+            if category in verified_signals:
+                verified_signals[category] = (0.0, "")
+                logger.debug(f"  → Removed {category}")
+        
+        # Add any new detections with LLM-provided scores
+        for category, signal_info in result.get("additions", {}).items():
+            if category not in verified_signals or abs(verified_signals[category][0]) < 0.01:
+                score = signal_info.get("score", 0.5)
+                tag = signal_info.get("tag", category)
+                verified_signals[category] = (float(score), str(tag))
+                logger.debug(f"  → Added {category}: ({score}, {tag})")
+        
+        return verified_signals
+        
+    except Exception as e:
+        logger.warning(f"LLM verification failed: {e}")
+        return embedding_signals
 
 
 def show_label_statistics(df: pl.DataFrame):
@@ -329,6 +495,17 @@ def main():
         action="store_true",
         help="Fetch article body from URLs when description is missing (slower, may add noise)"
     )
+    parser.add_argument(
+        "--llm-verify",
+        action="store_true",
+        help="Enable LLM verification for signal corrections (selective: 0 or >2 signals only)"
+    )
+    parser.add_argument(
+        "--max-llm-calls",
+        type=int,
+        default=50,
+        help="Maximum LLM API calls allowed (default: 50, set 0 for unlimited)"
+    )
     
     args = parser.parse_args()
     
@@ -352,6 +529,8 @@ def main():
         similarity_threshold=args.threshold,
         auto_calibrate=not args.no_calibrate,
         fetch_body=args.fetch_body,
+        llm_verify=args.llm_verify,
+        max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
     )
     
     # Show statistics
