@@ -79,31 +79,16 @@ class ReplicateAISettings:
     # Model version to use (default: Stability SDXL)
     model_id: str = os.getenv(
         "REPLICATE_MODEL_ID",
-        "stability-ai/sdxl:e6d46e9fa17efd92a6cb9176a9715231ff7a29108d5c4e45c89e42bdbf8dd265"
+        "black-forest-labs/flux-2-pro"
     )
-
-    # Image denoising strength (0-1, lower = more preserve layout)
-    image_strength: float = 0.75
-
-    # Guidance scale: How strongly to follow the prompt (7-15, higher = stricter adherence)
-    guidance_scale: float = 12.0
-
-    # Style preset for cartoonish vibes
-    style_preset: str = "comic-book"
 
     # Number of output images
     num_outputs: int = 1
-
-    # Number of inference steps
-    num_inference_steps: int = 30
 
     # Enable polishing via Replicate (can be disabled for testing)
     enable_polish: bool = os.getenv(
         "REPLICATE_ENABLE_POLISH", "false"
     ).lower() == "true"
-
-    # Timeout for Replicate API requests (seconds)
-    timeout_seconds: int = 300
 
 
 

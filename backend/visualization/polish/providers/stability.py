@@ -61,7 +61,7 @@ class StabilityAIPoller(ImagePoller):
     def polish(
         self,
         image_data: bytes,
-        prompt: Optional[str] = None,
+        prompt: str,
         negative_prompt: Optional[str] = None,
     ) -> Optional[bytes]:
         """

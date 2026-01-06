@@ -27,8 +27,7 @@ class ReplicateAIPoller(ImagePoller):
     def __init__(
         self,
         api_token: str,
-        model_id: str = "stability-ai/sdxl:e6d46e9fa17efd92a6cb9176a9715231ff7a29108d5c4e45c89e42bdbf8dd265",
-        image_strength: float = 0.35,
+        model_id: str = "black-forest-labs/flux-2-pro",
         guidance_scale: float = 12.0,
         style_preset: str = "comic-book",
         num_outputs: int = 1,
@@ -41,7 +40,6 @@ class ReplicateAIPoller(ImagePoller):
         Args:
             api_token: Replicate API token (automatically used by SDK)
             model_id: Model/version ID to use
-            image_strength: Denoising strength (0-1, lower = preserve more)
             guidance_scale: Prompt adherence (7-15, higher = follow prompt more strictly)
             style_preset: Style preset (e.g., 'comic-book', 'digital-art')
             num_outputs: Number of output images
@@ -50,7 +48,6 @@ class ReplicateAIPoller(ImagePoller):
         """
         self.api_token = api_token
         self.model_id = model_id
-        self.image_strength = image_strength
         self.guidance_scale = guidance_scale
         self.style_preset = style_preset
         self.num_outputs = num_outputs
@@ -64,7 +61,7 @@ class ReplicateAIPoller(ImagePoller):
     def polish(
         self,
         image_data: bytes,
-        prompt: Optional[str] = None,
+        prompt: str,
         negative_prompt: Optional[str] = None,
     ) -> Optional[bytes]:
         """
@@ -90,7 +87,6 @@ class ReplicateAIPoller(ImagePoller):
             polished_data = self._call_replicate_api(
                 image_data=image_data,
                 prompt=prompt,
-                negative_prompt=negative_prompt,
             )
             
             if polished_data:
@@ -108,8 +104,7 @@ class ReplicateAIPoller(ImagePoller):
     def _call_replicate_api(
         self,
         image_data: bytes,
-        prompt: Optional[str] = None,
-        negative_prompt: Optional[str] = None,
+        prompt: str = None,
     ) -> Optional[bytes]:
         """
         Call Replicate API using the official SDK.
@@ -134,13 +129,9 @@ class ReplicateAIPoller(ImagePoller):
             quality=95,
             convert_to_rgb=True,
         )
-        
-        # Use provided prompts or defaults
-        if not prompt:
-            prompt = "Transform Stockholm's cityscape into a vibrant, whimsical cartoon illustration, where the narratives shown by sections that look like pasted stickers are woven organically into the urban landscape. Render the entire scene in a unified cartoon aesthetic with cel-shaded depth, bold outlines, warm saturated colors, and playful geometric architecture. Each narrative element flows seamlessly as an integral part of the composition, not as overlaid additions—the cityscape itself tells these interconnected success stories through visual metaphor and scene design rather than literal symbols. Whimsical, charming, optimistic mood throughout, in the style of Pixar's conceptual art, Ghibli's environmental storytelling, and European comic illustration tradition."
 
         logger.info(
-            f"Calling Replicate API with image_strength={self.image_strength}"
+            f"Calling Replicate API model {self.model_id}"
         )
         logger.debug(f"Prompt: {prompt}")
 
@@ -163,7 +154,6 @@ class ReplicateAIPoller(ImagePoller):
             
             # To access the file URL:
             logger.info(f"Generated Image URL: {output.url}")
-            #=> "https://replicate.delivery/.../output.webp"
 
             return output.read()
                 

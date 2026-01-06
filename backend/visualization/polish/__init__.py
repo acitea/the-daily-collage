@@ -87,7 +87,7 @@ def create_poller(
     api_token: Optional[str] = None,
     api_host: str = "https://api.stability.ai",
     engine_id: str = "stable-diffusion-xl-1024-v1-0",
-    replicate_model_id: str = "stability-ai/sdxl:e6d46e9fa17efd92a6cb9176a9715231ff7a29108d5c4e45c89e42bdbf8dd265",
+    replicate_model_id: str = "black-forest-labs/flux-2-pro",
     image_strength: float = 0.35,
     cfg_scale: float = 12.0,
     guidance_scale: float = 12.0,

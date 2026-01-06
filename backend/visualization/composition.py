@@ -64,10 +64,6 @@ class HybridComposer:
                 enable_polish=settings.polish.enable,
                 api_token=settings.replicate_ai.api_token,
                 replicate_model_id=settings.replicate_ai.model_id,
-                image_strength=settings.replicate_ai.image_strength,
-                guidance_scale=settings.replicate_ai.guidance_scale,
-                style_preset=settings.replicate_ai.style_preset,
-                timeout=settings.replicate_ai.timeout_seconds,
             )
         else:
             # Default to Stability AI
@@ -128,14 +124,8 @@ class HybridComposer:
 
         # Step 2: Polish - enhance style while preserving layout
         polish_provider = settings.polish.provider.capitalize()
-        image_strength_setting = (
-            settings.replicate_ai.image_strength 
-            if settings.polish.provider == "replicate" 
-            else settings.stability_ai.image_strength
-        )
-        logger.info(
-            f"Polishing image with {polish_provider} (strength={image_strength_setting})"
-        )
+
+        logger.info(f"Polishing image with {polish_provider}")
 
         # Generate weather-based atmosphere prompts
         atmosphere_positive, atmosphere_negative = AtmosphereDescriptor.generate_atmosphere_prompt(
@@ -144,12 +134,7 @@ class HybridComposer:
 
         # Build base prompt: instruct AI to reimagine the scene incorporating concepts
         tag_strings = [signal.tag.value for signal in signals if abs(signal.score) > 0.1]
-        base_prompt = (
-            f"Reimagine this cityscape of {location} as a vibrant cartoon scene. "
-            f"Incorporate these visual elements naturally into the scenery: {', '.join(tag_strings)}. "
-            "Paint these concepts directly into the landscape and cityscape. "
-            "Cohesive illustrated scene, integrated composition, whimsical cartoon style, unified artistic rendering."
-        )
+        base_prompt = f"Transform into {location}'s cityscape as a vibrant, whimsical cartoon illustration, where the narratives shown by sections that look like pasted stickers are woven organically into the urban landscape. Render the entire scene in a unified cartoon aesthetic with cel-shaded depth, bold outlines, warm saturated colors, and playful geometric architecture. Each narrative element flows seamlessly as an integral part of the composition, not as overlaid additions—the cityscape itself tells these interconnected success stories through visual metaphor and scene design rather than literal symbols. Whimsical, charming, optimistic mood throughout, in the style of Pixar's conceptual art, Ghibli's environmental storytelling, and European comic illustration tradition."
 
         # Combine with atmosphere
         final_prompt = base_prompt
@@ -283,7 +268,7 @@ class VisualizationService:
         )
 
         # Check cache
-        if not force_regenerate and settings.vibe_hash.enable_cache:
+        if not force_regenerate:
             image_data, metadata = self.cache.get(city, timestamp)
             if image_data and metadata:
                 logger.info(f"Cache hit for {city}")
@@ -313,7 +298,3 @@ class VisualizationService:
             "hitboxes": hitboxes,
         }
 
-    @property
-    def cache_stats(self) -> Dict:
-        """Get cache statistics (deprecated)."""
-        return self.deprecated_cache.get_stats()
