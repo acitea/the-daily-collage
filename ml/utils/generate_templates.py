@@ -26,9 +26,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
+import os
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from openai import OpenAI
 from tqdm import tqdm
 import re
 
@@ -88,56 +88,35 @@ def normalize_category(raw: str) -> str:
 
 
 class TemplateLLM:
-    """Wrapper for local LLM to generate templates and keywords."""
+    """Wrapper for OpenAI API to generate templates and keywords."""
     
-    def __init__(self, model_name: str = "microsoft/phi-2"):
-        logger.info(f"Loading LLM: {model_name}...")
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    def __init__(self, model_name: str = "gpt-3.5-turbo"):
+        logger.info(f"Using OpenAI API with model: {model_name}")
         
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
         
-        # Phi-2 is 2.7B (much faster than 7B), fits in 12GB without quantization
-        if torch.cuda.is_available():
-            logger.info("Using float16 on GPU (Phi-2 2.7B is fast & memory-efficient)")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float16,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-            )
-        else:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-            )
-            self.model.to(self.device)
-        
-        self.model.eval()
-        logger.info(f"✓ LLM loaded on {self.device}")
+        self.client = OpenAI(api_key=api_key)
+        self.model_name = model_name
+        logger.info(f"✓ OpenAI client initialized")
     
     def call(self, prompt: str, max_tokens: int = 1500, temperature: float = 0.5) -> str:
-        """Generate response from LLM."""
-        # Use a more direct format for structured tasks
-        formatted_prompt = prompt
-        
-        inputs = self.tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=4096)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
+        """Generate response from OpenAI API."""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are a precise news classification assistant. Follow output format instructions exactly."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_tokens,
                 temperature=temperature,
-                do_sample=True,
-                top_p=0.95,
-                pad_token_id=self.tokenizer.eos_token_id,
             )
-        
-        response = self.tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
-        return response.strip()
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OpenAI API call failed: {e}")
+            return ""
     
     def classify_article_batch(self, articles: List[Dict]) -> Dict[int, Dict[str, float]]:
         """
@@ -167,7 +146,7 @@ Article 2: sports=0.90 economics=0.40
 YOUR OUTPUT:"""
         
         try:
-            response = self.call(prompt, max_tokens=800, temperature=0.01)
+            response = self.call(prompt, max_tokens=800, temperature=0.1)
             
             # Log response excerpt for debugging
             logger.debug(f"LLM Response (first 500 chars):\n{response[:500]}")
@@ -385,8 +364,8 @@ def generate_templates_and_keywords(
     logger.info("Classifying articles into categories...")
     categorized_articles = defaultdict(list)
     
-    # Phi-2 is fast and lightweight, can use larger batch size
-    batch_size = 16
+    # Process in batches - OpenAI handles this efficiently
+    batch_size = 20  # Can be larger with OpenAI
     for i in tqdm(range(0, len(articles), batch_size), desc="Classifying"):
         batch = articles[i:i+batch_size]
         classifications = llm.classify_article_batch(batch)
@@ -400,10 +379,6 @@ def generate_templates_and_keywords(
                 for category, score in category_scores.items():
                     if score >= 0.3:  # Relaxed confidence threshold
                         categorized_articles[category].append(article)
-        
-        # Clear CUDA cache between batches to prevent memory buildup
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
     
     logger.info("✓ Classification complete")
     for cat, arts in categorized_articles.items():
@@ -476,8 +451,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate signal templates and keywords from GDELT")
     parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch")
     parser.add_argument("--country", type=str, default="sweden", help="Country filter")
-    parser.add_argument("--model", type=str, default="microsoft/phi-2", 
-                        help="LLM model name (default: Phi-2 2.7B, much faster than Mistral-7B)")
+    parser.add_argument("--model", type=str, default="gpt-3.5-turbo", 
+                        help="OpenAI model name (default: gpt-3.5-turbo, or use gpt-4 for better quality)")
     parser.add_argument("--templates-per-category", type=int, default=30, 
                         help="Number of template phrases per category")
     parser.add_argument("--keywords-per-category", type=int, default=25, 
