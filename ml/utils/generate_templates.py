@@ -167,7 +167,7 @@ Article 2: sports=0.90 economics=0.40
 YOUR OUTPUT:"""
         
         try:
-            response = self.call(prompt, max_tokens=800, temperature=0.0)
+            response = self.call(prompt, max_tokens=800, temperature=0.01)
             
             # Log response excerpt for debugging
             logger.debug(f"LLM Response (first 500 chars):\n{response[:500]}")
