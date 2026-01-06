@@ -30,6 +30,7 @@ from typing import Dict, List
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
+import re
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -139,7 +140,26 @@ JSON:"""
             json_end = response.rfind('}') + 1
             if json_start != -1 and json_end > json_start:
                 json_str = response[json_start:json_end]
-                classifications = json.loads(json_str)
+                
+                # Clean common JSON issues from LLM output
+                # Replace unescaped backslashes (but not already escaped ones)
+                json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
+                # Remove control characters that break JSON
+                json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                
+                try:
+                    classifications = json.loads(json_str)
+                except json.JSONDecodeError as je:
+                    logger.warning(f"JSON parse error: {je}. Trying lenient parse...")
+                    # Try to extract just the structure we need with regex
+                    pattern = r'"(\d+)"\s*:\s*\{([^}]+)\}'
+                    matches = re.findall(pattern, json_str)
+                    classifications = {}
+                    for article_num, scores_str in matches:
+                        # Extract category:score pairs
+                        score_pattern = r'"([^"]+)"\s*:\s*([0-9.]+)'
+                        scores = dict(re.findall(score_pattern, scores_str))
+                        classifications[article_num] = {k: float(v) for k, v in scores.items()}
                 
                 # Convert string keys to int
                 return {int(k): v for k, v in classifications.items()}
@@ -250,7 +270,19 @@ JSON:"""
             json_end = response.rfind('}') + 1
             if json_start != -1 and json_end > json_start:
                 json_str = response[json_start:json_end]
-                keywords = json.loads(json_str)
+                
+                # Clean common JSON issues
+                json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
+                json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                
+                try:
+                    keywords = json.loads(json_str)
+                except json.JSONDecodeError as je:
+                    logger.warning(f"JSON parse error for {category}: {je}. Trying regex extraction...")
+                    # Extract key-value pairs with regex
+                    pattern = r'"([^"]+)"\s*:\s*"([^"]+)"'
+                    matches = re.findall(pattern, json_str)
+                    keywords = dict(matches)
                 
                 # Filter out invalid entries
                 valid_keywords = {}
