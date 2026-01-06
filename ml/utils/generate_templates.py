@@ -55,14 +55,23 @@ class TemplateLLM:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto" if torch.cuda.is_available() else None,
-            low_cpu_mem_usage=True,
-        )
         
-        if not torch.cuda.is_available():
+        # Use 4-bit quantization for CUDA to fit in 12GB VRAM (7B model needs ~4GB in 4-bit)
+        if torch.cuda.is_available():
+            logger.info("Using 4-bit quantization for GPU (12GB VRAM compatible)")
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                load_in_4bit=True,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+                torch_dtype=torch.float16,
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True,
+            )
             self.model.to(self.device)
         
         self.model.eval()
@@ -302,7 +311,8 @@ def generate_templates_and_keywords(
     logger.info("Classifying articles into categories...")
     categorized_articles = defaultdict(list)
     
-    batch_size = 10
+    # Reduce batch size for 4-bit model to avoid memory spikes
+    batch_size = 5
     for i in tqdm(range(0, len(articles), batch_size), desc="Classifying"):
         batch = articles[i:i+batch_size]
         classifications = llm.classify_article_batch(batch)
@@ -316,6 +326,10 @@ def generate_templates_and_keywords(
                 for category, score in category_scores.items():
                     if score >= 0.4:  # Confidence threshold
                         categorized_articles[category].append(article)
+        
+        # Clear CUDA cache between batches to prevent memory buildup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     logger.info("✓ Classification complete")
     for cat, arts in categorized_articles.items():
