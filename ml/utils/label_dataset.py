@@ -38,11 +38,82 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.script import fetch_news, fetch_news_batched
-from ml.utils.embedding_labeling import classify_article_embedding
+from ml.utils.embedding_labeling import classify_article_embedding, load_tag_keywords
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
 
 logger = logging.getLogger(__name__)
+
+
+def keyword_fallback_classify(title: str, description: str) -> dict:
+    """
+    Fallback keyword-based classification using tag_keywords from JSON.
+    Used when embedding classification finds no signals.
+    
+    Args:
+        title: Article title
+        description: Article description
+        
+    Returns:
+        Dict mapping category to (score, tag) tuple
+    """
+    text = f"{title} {description}".lower()
+    tag_keywords = load_tag_keywords()
+    
+    signals = {}
+    
+    for category, keywords_dict in tag_keywords.items():
+        # Check if any keyword from this category appears in text
+        for keyword, tag in keywords_dict.items():
+            if keyword in text:
+                # Assign moderate intensity (-0.5 for negative categories, 0.5 for positive)
+                if category in ["emergencies", "crime", "transportation"]:
+                    score = -0.5  # Negative events
+                elif category in ["festivals", "sports"]:
+                    score = 0.5  # Positive events
+                elif category in ["weather_temp", "weather_wet"]:
+                    score = -0.4  # Mild negative (weather issues)
+                else:  # economics, politics
+                    score = -0.3  # Neutral-to-negative
+                
+                signals[category] = (score, tag)
+                break  # Only one tag per category
+    
+    return signals
+
+
+def prune_to_top_signals(signals: dict, max_signals: int = 2) -> dict:
+    """
+    Keep only the top N signals with highest confidence (absolute score).
+    
+    Args:
+        signals: Dict mapping category to (score, tag) tuple
+        max_signals: Maximum number of signals to keep
+        
+    Returns:
+        Pruned signals dict
+    """
+    # Filter out zero signals
+    active_signals = {cat: (score, tag) for cat, (score, tag) in signals.items() if abs(score) > 0.01}
+    
+    # If already <= max_signals, return as-is
+    if len(active_signals) <= max_signals:
+        return signals
+    
+    # Sort by absolute score (confidence) descending
+    sorted_signals = sorted(active_signals.items(), key=lambda x: abs(x[1][0]), reverse=True)
+    
+    # Keep top N, zero out the rest
+    keep_categories = set(cat for cat, _ in sorted_signals[:max_signals])
+    
+    pruned = {}
+    for cat in SIGNAL_CATEGORIES:
+        if cat in keep_categories:
+            pruned[cat] = active_signals[cat]
+        else:
+            pruned[cat] = (0.0, "")
+    
+    return pruned
 
 # Global LLM model and tokenizer (loaded once)
 _local_llm_model = None
@@ -443,6 +514,7 @@ def fetch_and_label(
     print("\n📊 Phase 1: Embedding-based classification...")
     all_articles = []
     articles_needing_verification = []
+    fallback_count = 0
     
     for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Classifying"):
         title = row.get("title", "")
@@ -474,6 +546,14 @@ def fetch_and_label(
                         title=title,
                         description=description
                     )
+                
+                # Fallback to keyword search if no signals found
+                detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
+                if detected_count == 0:
+                    signals = keyword_fallback_classify(title, description)
+                    if any(abs(score) > 0.01 for _, (score, _) in signals.items()):
+                        fallback_count += 1
+                
             except Exception as e:
                 print(f"\n⚠️  Embedding failed: {e}")
                 method = "keywords"
@@ -481,6 +561,9 @@ def fetch_and_label(
         if method == "keywords":
             from ml.ingestion.hopsworks_pipeline import classify_article
             signals = classify_article(title, description, method="keywords")
+        
+        # Prune to top 2 signals before verification
+        signals = prune_to_top_signals(signals, max_signals=2)
         
         # Check if needs LLM verification
         detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
@@ -552,6 +635,10 @@ def fetch_and_label(
     
     labeled_df = pl.DataFrame(labeled_rows)
     print(f"\n✓ Labeled {len(labeled_df)} articles")
+    
+    # Show fallback statistics
+    if fallback_count > 0:
+        print(f"📝 Keyword fallback used: {fallback_count} article(s) (no embedding signals found)")
     
     # Show verification statistics
     if llm_verify and llm_call_count['calls'] > 0:
