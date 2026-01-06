@@ -14,6 +14,13 @@ import sys
 import os
 from typing import Dict, Tuple, Optional, List
 
+# Optional LLM dependency for adjudication
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except Exception:  # pragma: no cover - optional runtime dep
+    HAS_OPENAI = False
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -179,6 +186,10 @@ def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, i
     failed = 0
     errors: List[str] = []
 
+    llm_agree = 0
+    llm_disagree = 0
+    llm_skipped = 0
+
     for article in articles.iter_rows(named=True):
         title = article.get("title") or article.get("documentIdentifier") or ""
         description = article.get("summary") or article.get("content") or article.get("excerpt") or ""
@@ -206,11 +217,74 @@ def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, i
             print(f"        Error: Invalid score {top_score}")
             continue
 
+        # LLM adjudication for real-news outputs (best-effort)
+        llm_verdict = None
+        if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
+            llm_verdict = llm_judge_prediction(title, description, top_cat, top_score, top_tag)
+            if llm_verdict is not None:
+                if llm_verdict[0]:
+                    llm_agree += 1
+                else:
+                    llm_disagree += 1
+            else:
+                llm_skipped += 1
+        else:
+            llm_skipped += 1
+
         passed += 1
         print(f"  ✅ PASS | {title[:60]}...")
         print(f"        Top: {top_cat:18s} ({top_score:+.3f}) tag='{top_tag}'")
+        if llm_verdict:
+            verdict, reason = llm_verdict
+            status = "LLM agrees" if verdict else "LLM disagrees"
+            print(f"        LLM: {status} — {reason}")
+        elif HAS_OPENAI:
+            print("        LLM: skipped (no verdict)")
+        else:
+            print("        LLM: skipped (no OPENAI_API_KEY)")
+
+    if HAS_OPENAI:
+        print(f"\nLLM adjudication: agree={llm_agree}, disagree={llm_disagree}, skipped={llm_skipped}")
 
     return passed, failed, errors
+
+
+def llm_judge_prediction(title: str, description: str, category: str, score: float, tag: str) -> Optional[Tuple[bool, str]]:
+    """Ask the LLM whether the predicted category/tag makes sense for the article."""
+    try:
+        client = OpenAI()
+    except Exception:
+        return None
+
+    prompt = f"""
+Article:
+Title: {title}
+Description: {description[:600]}
+
+Model prediction:
+- Category: {category}
+- Score: {score:+.3f}
+- Tag: {tag}
+
+Signal categories to choose from: emergencies, crime, festivals, transportation, weather_temp, weather_wet, sports, economics, politics.
+
+Decide if the predicted category matches the article. Return strict JSON:
+{{"agree": true|false, "reason": "short reason"}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=200,
+        )
+        content = response.choices[0].message.content.strip()
+        data = json.loads(content)
+        return bool(data.get("agree", False)), str(data.get("reason", "no reason provided"))
+    except Exception as exc:  # pragma: no cover - best-effort guard
+        print(f"        LLM adjudication failed: {exc}")
+        return None
 
 
 def run_tests() -> None:

@@ -47,6 +47,8 @@ def classify_articles_batch_with_llm(
     articles: list,
     llm_call_count: dict = None,
     max_llm_calls: int = None,
+    max_categories: int = 2,
+    max_batch_size: int = 15,
 ) -> dict:
     """
     Use LLM to verify and correct multiple articles in a single batch call.
@@ -55,6 +57,7 @@ def classify_articles_batch_with_llm(
         articles: List of {title, description, signals, detected_count} dicts
         llm_call_count: Dict tracking {'calls': N} for cost control
         max_llm_calls: Maximum LLM API calls allowed
+        max_categories: Max number of categories to keep after LLM pruning
         
     Returns:
         Dict mapping article index to corrected signals
@@ -69,17 +72,20 @@ def classify_articles_batch_with_llm(
     if not articles:
         return {}
     
+    # Trim batch size to stay within context
+    articles = articles[:max_batch_size]
+
     # Increment call counter
     llm_call_count['calls'] += 1
     
     try:
         from openai import OpenAI
         
-        # Build batch prompt with all articles
+        # Build batch prompt with all articles (shortened text to avoid context blow-ups)
         articles_text = ""
         for i, article in enumerate(articles):
-            title = article["title"]
-            desc = article["description"][:500]  # Truncate to 500 chars
+            title = article["title"][:140]
+            desc = article["description"][:280]  # Tight truncation to reduce tokens
             signals = article["signals"]
             
             current_signals = {}
@@ -96,7 +102,7 @@ Description: {desc}...
 Current Classifications: {json.dumps(current_signals) if current_signals else '(no signals)'}
 ---"""
         
-        prompt = f"""Analyze these {len(articles)} news articles and verify all signal detections.
+        prompt = f"""Analyze {len(articles)} news articles and correct signal detections.
 
 {articles_text}
 
@@ -111,12 +117,11 @@ Signal Categories:
 - economics: markets, business, employment (score: -0.8 to 1)
 - politics: elections, policy, governance (score: -0.5 to 1)
 
-For each article:
-1. Does each detected category make sense?
-2. Is the score magnitude correct? (major events: -0.8 to -1 or 0.8 to 1; minor: -0.3 to 0 or 0.3)
-3. Is the direction correct? (negative=bad/problem, positive=good/success)
-4. Are any signals completely wrong?
-5. Are any major signals missed?
+For each article (keep at most {max_categories} categories total):
+1) Remove weak/irrelevant categories.
+2) Adjust scores if too strong/weak; negative = bad/problem, positive = good/success.
+3) Remove wrong categories; add only clearly justified missing ones.
+4) If more than {max_categories} categories remain, keep the strongest and zero the rest.
 
 Return ONLY valid JSON (one object per article):
 {{
@@ -143,9 +148,12 @@ If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals"
         
         result_text = response.choices[0].message.content.strip()
         logger.debug(f"LLM batch verification #{llm_call_count['calls']}: {len(articles)} articles")
-        
-        # Parse response
-        result = json.loads(result_text)
+
+        # Parse response with resilient JSON extractor
+        result = _safe_parse_llm_json(result_text)
+        if result is None:
+            logger.warning(f"LLM batch verification JSON parse failed; raw response truncated: {result_text[:240]}")
+            return {i: article["signals"] for i, article in enumerate(articles)}
         batch_corrections = {}
         
         for item in result.get("results", []):
@@ -177,6 +185,18 @@ If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals"
                         verified_signals[category] = (float(score), str(tag))
                         logger.debug(f"  Article {article_idx+1} → Added {category}")
                 
+                # Prune to strongest categories
+                if len([c for c, (s, _) in verified_signals.items() if abs(s) > 0.01]) > max_categories:
+                    sorted_cats = sorted(
+                        verified_signals.items(),
+                        key=lambda kv: abs(kv[1][0]),
+                        reverse=True,
+                    )
+                    keep = set(cat for cat, _ in sorted_cats[:max_categories])
+                    for cat in list(verified_signals.keys()):
+                        if cat not in keep:
+                            verified_signals[cat] = (0.0, "")
+                    logger.debug(f"  Article {article_idx+1} → Pruned to top {max_categories}")
                 batch_corrections[article_idx] = verified_signals
         
         # Fill in missing articles (no corrections)
@@ -191,6 +211,25 @@ If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals"
         return {i: article["signals"] for i, article in enumerate(articles)}
 
 
+def _safe_parse_llm_json(text: str) -> dict | None:
+    """Try to parse JSON; if failed, attempt to salvage the first JSON object."""
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Try to find the first JSON object in the text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        snippet = text[start:end + 1]
+        try:
+            return json.loads(snippet)
+        except Exception:
+            return None
+    return None
+
+
 def fetch_and_label(
     country: str = "sweden",
     num_articles: int = 500,
@@ -200,6 +239,8 @@ def fetch_and_label(
     fetch_body: bool = False,
     llm_verify: bool = False,
     max_llm_calls: int = None,
+    llm_max_categories: int = 2,
+    llm_batch_size: int = 15,
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them with optional batch LLM verification.
@@ -213,13 +254,18 @@ def fetch_and_label(
         fetch_body: If True, fetch article body from URL when description is missing
         llm_verify: If True, use LLM to verify and correct classifications (batch processing)
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
+        llm_max_categories: Max categories to keep per article after LLM pruning
+        llm_batch_size: Max articles per LLM batch call (controls context length)
         
     Returns:
         Labeled DataFrame
     """
     # Set default API limit
-    if llm_verify and max_llm_calls is None:
-        max_llm_calls = 50
+    if llm_verify:
+        if max_llm_calls is None:
+            max_llm_calls = 50
+        if not HAS_OPENAI:
+            logger.warning("LLM verification requested but openai package not available; skipping LLM.")
     
     llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
@@ -247,6 +293,7 @@ def fetch_and_label(
             print("   (with automatic intensity calibration)")
         if llm_verify:
             print(f"   (LLM verification: batch processing, max {max_llm_calls} batch calls)")
+            print(f"   (LLM batch size: {llm_batch_size} articles per call)")
     else:
         print("🔤 Auto-labeling with keyword-based classification...")
     
@@ -295,7 +342,7 @@ def fetch_and_label(
         
         # Check if needs LLM verification
         detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
-        needs_verification = llm_verify and (detected_count == 0 or detected_count > 2)
+        needs_verification = llm_verify and (detected_count == 0 or detected_count > llm_max_categories)
         
         article_data = {
             "row": row,
@@ -313,14 +360,21 @@ def fetch_and_label(
     # Phase 2: Batch LLM verification
     if articles_needing_verification:
         print(f"\n🤖 Phase 2: LLM batch verification ({len(articles_needing_verification)} articles)...")
-        batch_results = classify_articles_batch_with_llm(
-            articles=articles_needing_verification,
-            llm_call_count=llm_call_count,
-            max_llm_calls=max_llm_calls,
-        )
+        batch_results_all = {}
+        for start in range(0, len(articles_needing_verification), llm_batch_size):
+            batch = articles_needing_verification[start:start + llm_batch_size]
+            batch_results = classify_articles_batch_with_llm(
+                articles=batch,
+                llm_call_count=llm_call_count,
+                max_llm_calls=max_llm_calls,
+                max_categories=llm_max_categories,
+                max_batch_size=llm_batch_size,
+            )
+            for idx, corrected in batch_results.items():
+                batch_results_all[start + idx] = corrected
         
         # Apply batch results back
-        for article_idx, corrected_signals in batch_results.items():
+        for article_idx, corrected_signals in batch_results_all.items():
             articles_needing_verification[article_idx]["signals"] = corrected_signals
     
     # Phase 3: Build output
@@ -473,6 +527,8 @@ def main():
     parser.add_argument("--fetch-body", action="store_true", help="Fetch article body from URLs")
     parser.add_argument("--llm-verify", action="store_true", help="Enable LLM verification (batch processing)")
     parser.add_argument("--max-llm-calls", type=int, default=50, help="Maximum LLM batch calls (default: 50)")
+    parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM pruning (default: 2)")
+    parser.add_argument("--llm-batch-size", type=int, default=15, help="Max articles per LLM call to avoid context overflow (default: 15)")
     
     args = parser.parse_args()
     
@@ -488,6 +544,8 @@ def main():
     if args.llm_verify:
         max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
         print(f"LLM verification: enabled (batch, max {max_calls} calls)")
+        print(f"LLM max categories: {args.llm_max_categories}")
+        print(f"LLM batch size:    {args.llm_batch_size}")
     else:
         print(f"LLM verification: disabled")
     print(f"Output:          {args.output}")
@@ -503,6 +561,8 @@ def main():
         fetch_body=args.fetch_body,
         llm_verify=args.llm_verify,
         max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
+        llm_max_categories=args.llm_max_categories,
+        llm_batch_size=args.llm_batch_size,
     )
     
     # Show statistics
