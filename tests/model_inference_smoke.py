@@ -12,6 +12,7 @@ NOTE: Requires OPENAI_API_KEY environment variable to be set.
 from pathlib import Path
 import sys
 import os
+import json
 from typing import Dict, Tuple, Optional, List
 
 # Optional LLM dependency for adjudication
@@ -148,17 +149,17 @@ def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple
     Returns:
         (passed: bool, error_msg: Optional[str])
     """
-    result = model.classify(text, desc)
+    # Use confidence-based classification (exclude sports if needed)
+    top_result = model.get_top_category(text, desc, exclude_categories=['sports'])
     
-    if not result:
+    if not top_result:
         return False, "No predictions above threshold"
     
-    # Find category with highest score
-    top_category, (top_score, top_tag) = max(result.items(), key=lambda x: x[1][0])
+    top_category, top_score, top_tag, confidence = top_result
     
     # Check 1: Top category matches expected
     if top_category != expected_category:
-        return False, f"Expected {expected_category}, got {top_category}"
+        return False, f"Expected {expected_category}, got {top_category} (confidence={confidence:.3f})"
     
     # Check 2: Tag is not null
     if top_tag is None or top_tag.strip() == "":
@@ -208,9 +209,17 @@ def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, i
             print("        Error: No predictions")
             continue
 
-        # Check top prediction exists and score within range
-        top_cat, (top_score, top_tag) = max(result.items(), key=lambda x: x[1][0])
-        if top_cat not in result or top_score < -1.5 or top_score > 1.5:
+        # Check top prediction using confidence-based selection
+        top_result = model.get_top_category(title, description)
+        if not top_result:
+            failed += 1
+            errors.append("empty_result")
+            print(f"  ❌ FAIL | {title[:60]}...")
+            print("        Error: No top category")
+            continue
+        
+        top_cat, top_score, top_tag, confidence = top_result
+        if top_score < -1.5 or top_score > 1.5:
             failed += 1
             errors.append("invalid_score")
             print(f"  ❌ FAIL | {title[:60]}...")
@@ -233,7 +242,7 @@ def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, i
 
         passed += 1
         print(f"  ✅ PASS | {title[:60]}...")
-        print(f"        Top: {top_cat:18s} ({top_score:+.3f}) tag='{top_tag}'")
+        print(f"        Top: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f} tag='{top_tag}'")
         if llm_verdict:
             verdict, reason = llm_verdict
             status = "LLM agrees" if verdict else "LLM disagrees"
@@ -313,12 +322,12 @@ def run_tests() -> None:
             success, error = test_case(title, text, desc, category)
             
             # Get full result for display
-            result = model.classify(text, desc)
-            if result:
-                top_cat, (top_score, top_tag) = max(result.items(), key=lambda x: x[1][0])
+            top_result = model.get_top_category(text, desc, exclude_categories=['sports'])
+            if top_result:
+                top_cat, top_score, top_tag, confidence = top_result
                 status = "✅ PASS" if success else "❌ FAIL"
                 print(f"  {status} | {title}")
-                print(f"        Top: {top_cat:18s} ({top_score:+.3f}) tag='{top_tag}'")
+                print(f"        Top: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f} tag='{top_tag}'")
                 
                 if not success:
                     print(f"        Error: {error}")

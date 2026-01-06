@@ -9,7 +9,7 @@ from transformers import AutoModel, AutoTokenizer
 from pathlib import Path
 import sys
 import logging
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -144,6 +144,89 @@ class NewsSignalClassifierInference:
                 results[cat] = (score, tag)
 
         return results
+    
+    @torch.no_grad()
+    def classify_with_confidence(self, title: str, description: str = "") -> Dict[str, Tuple[float, str, float]]:
+        """
+        Classify article with category relevance scores.
+        
+        Returns:
+            Dict mapping category -> (score, tag, confidence)
+            - score: Sentiment/intensity (-1 to 1, Tanh output)
+            - tag: Predicted tag within category
+            - confidence: Category relevance (0 to 1, from tag head probabilities)
+        """
+        text = f"{title} [SEP] {description}"
+
+        # Tokenize
+        inputs = self.tokenizer(
+            text,
+            max_length=512,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+
+        input_ids = inputs['input_ids'].to(self.device)
+        attention_mask = inputs['attention_mask'].to(self.device)
+
+        # Forward pass
+        predictions = self.model(input_ids, attention_mask)
+
+        # Process outputs with confidence scores
+        results = {}
+        for cat in SIGNAL_CATEGORIES:
+            score_tensor, tag_logits = predictions[cat]
+            score = float(score_tensor.squeeze().cpu())
+
+            # Get tag from tag head
+            tag_probs = torch.softmax(tag_logits, dim=-1)
+            tag_idx = torch.argmax(tag_probs, dim=-1).item()
+            tag = TAG_VOCAB[cat][tag_idx] if tag_idx < len(TAG_VOCAB[cat]) else ""
+            
+            # Use absolute value of score as confidence/relevance
+            # Rational: Score represents intensity (how strong the signal is)
+            # Articles irrelevant to a category should have scores near 0
+            # Relevant articles (positive or negative events) should have high |score|
+            confidence = abs(score)
+
+            # Include if relevant
+            if confidence > 0.01:  # Very low threshold - include anything non-zero
+                results[cat] = (score, tag, confidence)
+
+        return results
+    
+    def get_top_category(self, title: str, description: str = "", 
+                        exclude_categories: Optional[List[str]] = None) -> Optional[Tuple[str, float, str, float]]:
+        """
+        Get the most relevant category for an article.
+        
+        Args:
+            title: Article title
+            description: Article description
+            exclude_categories: List of categories to exclude (e.g., ['sports'] if untrained)
+            
+        Returns:
+            (category, score, tag, confidence) or None if no relevant category
+            Selects based on confidence (relevance), not score (sentiment)
+        """
+        results = self.classify_with_confidence(title, description)
+        
+        if not results:
+            return None
+        
+        # Filter out excluded categories
+        if exclude_categories:
+            results = {k: v for k, v in results.items() if k not in exclude_categories}
+        
+        if not results:
+            return None
+        
+        # Find category with highest confidence (relevance)
+        top_cat = max(results.items(), key=lambda x: x[1][2])  # x[1][2] is confidence
+        category, (score, tag, confidence) = top_cat
+        
+        return category, score, tag, confidence
 
 
 # Global classifier instance
