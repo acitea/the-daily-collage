@@ -148,20 +148,32 @@ JSON:"""
                 json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
                 # Remove control characters that break JSON
                 json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                # Replace single quotes with double quotes (common in LLM output)
+                json_str = re.sub(r"'", '"', json_str)
+                # Fix missing commas between key-value pairs (e.g., ": 0.5 "category" -> ": 0.5, "category")
+                json_str = re.sub(r'([0-9.]+)\s+"', r'\1, "', json_str)
+                # Fix escaped quotes inside strings
+                json_str = re.sub(r'\\"', '"', json_str)
                 
                 try:
                     classifications = json.loads(json_str)
                 except json.JSONDecodeError as je:
-                    logger.warning(f"JSON parse error: {je}. Trying lenient parse...")
+                    logger.warning(f"JSON parse error: {je}. Trying lenient regex parse...")
                     # Try to extract just the structure we need with regex
                     pattern = r'"(\d+)"\s*:\s*\{([^}]+)\}'
                     matches = re.findall(pattern, json_str)
                     classifications = {}
                     for article_num, scores_str in matches:
-                        # Extract category:score pairs
-                        score_pattern = r'"([^"]+)"\s*:\s*([0-9.]+)'
-                        scores = dict(re.findall(score_pattern, scores_str))
-                        classifications[article_num] = {k: float(v) for k, v in scores.items()}
+                        # Extract category:score pairs - more flexible pattern
+                        score_pattern = r'"?([a-z_]+)"?\s*:\s*([0-9.]+)'
+                        scores = {}
+                        for cat, score_str in re.findall(score_pattern, scores_str):
+                            try:
+                                scores[cat] = float(score_str)
+                            except ValueError:
+                                pass
+                        if scores:
+                            classifications[article_num] = scores
                 
                 # Ensure all scores are floats (LLM might return strings like "0.85")
                 result = {}
@@ -284,13 +296,17 @@ JSON:"""
                 # Clean common JSON issues
                 json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
                 json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                # Replace single quotes with double quotes
+                json_str = re.sub(r"'", '"', json_str)
+                # Fix missing commas
+                json_str = re.sub(r'"\s+"', '", "', json_str)
                 
                 try:
                     keywords = json.loads(json_str)
                 except json.JSONDecodeError as je:
                     logger.warning(f"JSON parse error for {category}: {je}. Trying regex extraction...")
-                    # Extract key-value pairs with regex
-                    pattern = r'"([^"]+)"\s*:\s*"([^"]+)"'
+                    # Extract key-value pairs with more flexible regex
+                    pattern = r'"?([^":]+)"?\s*:\s*"?([^",}]+)"?'
                     matches = re.findall(pattern, json_str)
                     keywords = dict(matches)
                 
@@ -298,7 +314,7 @@ JSON:"""
                 valid_keywords = {}
                 for k, v in keywords.items():
                     if isinstance(k, str) and isinstance(v, str) and len(k) > 2 and len(v) > 0:
-                        valid_keywords[k.lower()] = v.lower()
+                        valid_keywords[k.lower().strip()] = v.lower().strip()
                 
                 return valid_keywords
             else:
