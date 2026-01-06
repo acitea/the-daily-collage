@@ -38,7 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.script import fetch_news_batched
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # Signal categories (must match system)
@@ -397,8 +397,6 @@ def generate_templates_and_keywords(
         batch = articles[i:i+batch_size]
         classifications = llm.classify_article_batch(batch)
         
-        if not classifications:
-            logger.debug("LLM classification returned no lines to parse for this batch. Sample output: %s", (response[:200] if 'response' in locals() else ''))
         for local_idx, category_scores in classifications.items():
             global_idx = i + local_idx - 1  # LLM uses 1-indexed
             if global_idx < len(articles):
