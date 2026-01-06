@@ -488,8 +488,8 @@ def fetch_and_label(
         df = fetch_news_batched(
             country=country,
             total_articles=num_articles,
-            batch_size=250,
-            days_lookback=30
+            batch_size=500,
+            days_lookback=60,
         )
     else:
         df = fetch_news(

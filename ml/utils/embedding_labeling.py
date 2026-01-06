@@ -585,6 +585,10 @@ def classify_article_embedding(
     all_scores = []  # Track all scores for relative filtering
 
     for category, template_embeddings in signal_embeddings.items():
+        # Skip if no embeddings for this category
+        if template_embeddings is None or len(template_embeddings) == 0:
+            continue
+            
         # Compute similarity to each template in this category
         similarities = []
         for template_emb in template_embeddings:
@@ -603,7 +607,14 @@ def classify_article_embedding(
 
         if confidence_score >= similarity_threshold:
             # Select tag based on the best-matching template
-            best_template = SIGNAL_TEMPLATES[category][best_template_idx]
+            # Use loaded templates with fallback to hardcoded SIGNAL_TEMPLATES
+            templates = load_signal_templates()
+            category_templates = templates.get(category, [])
+            if best_template_idx < len(category_templates):
+                best_template = category_templates[best_template_idx]
+            else:
+                # Fallback if index out of range
+                best_template = category_templates[0] if category_templates else ""
             
             # Infer tag from best template
             tag = infer_tag_from_template(category, best_template)
@@ -612,7 +623,7 @@ def classify_article_embedding(
             all_scores.append(confidence_score)
     
     # Filter to keep only high-confidence signals
-    if results and (top_k_signals or relative_threshold):
+    if results and (top_k_signals or relative_threshold) and all_scores:
         max_score = max(all_scores)
         
         # Apply relative threshold: keep signals within X% of the max
@@ -627,7 +638,9 @@ def classify_article_embedding(
         # Apply top-K filtering if specified
         if top_k_signals and len(results) > top_k_signals:
             sorted_results = sorted(results.items(), key=lambda x: x[1][0], reverse=True)
-            results = dict(sorted_results[:top_k_signals])
+            # Safely slice with bounds checking
+            k = min(top_k_signals, len(sorted_results))
+            results = dict(sorted_results[:k])
     
     return results
 
