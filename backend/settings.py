@@ -24,7 +24,7 @@ class PolishSettings:
     """Settings for image polishing provider selection."""
 
     # Which provider to use for polishing: 'stability' or 'replicate'
-    provider: str = os.getenv("POLISH_PROVIDER", "stability").lower()
+    provider: str = os.getenv("POLISH_PROVIDER", "mock").lower()
 
     # Enable polishing globally (can be disabled for testing)
     enable: bool = os.getenv("ENABLE_POLISH", "false").lower() == "true"
@@ -60,11 +60,6 @@ class StabilityAISettings:
         "STABILITY_MODEL_ID", "stable-diffusion-xl-1024-v1-0"
     )
 
-    # Enable polishing (can be disabled for testing)
-    enable_polish: bool = os.getenv(
-        "STABILITY_ENABLE_POLISH", "false"
-    ).lower() == "true"
-
     # Timeout for Stability API requests (seconds)
     timeout_seconds: int = 60
 
@@ -85,10 +80,6 @@ class ReplicateAISettings:
     # Number of output images
     num_outputs: int = 1
 
-    # Enable polishing via Replicate (can be disabled for testing)
-    enable_polish: bool = os.getenv(
-        "REPLICATE_ENABLE_POLISH", "false"
-    ).lower() == "true"
 
 
 
@@ -195,6 +186,7 @@ class Settings:
     """
 
     def __init__(self):
+        print('Loading configuration settings...')
         self.polish = PolishSettings()
         self.stability_ai = StabilityAISettings()
         self.replicate_ai = ReplicateAISettings()
@@ -203,6 +195,9 @@ class Settings:
         self.assets = AssetSettings()
         self.layout = LayoutSettings()
         self.api = APISettings()
+
+        issues = self.validate()
+        if issues: print("Settings Configuration Issues:\n" + "\n".join(issues))
 
     def validate(self) -> list[str]:
         """

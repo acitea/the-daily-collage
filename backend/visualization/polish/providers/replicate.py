@@ -5,6 +5,7 @@ Uses the official Replicate Python SDK to enhance image style while
 preserving layout. Supports async prediction with automatic polling.
 """
 
+import io
 import logging
 from typing import Optional
 
@@ -56,10 +57,6 @@ class ReplicateAIPoller(ImagePoller):
         self.num_outputs = num_outputs
         self.num_inference_steps = num_inference_steps
         self.timeout = timeout
-        
-        # Set API token for Replicate SDK
-        import os
-        os.environ["REPLICATE_API_TOKEN"] = api_token
 
     def polish(
         self,
@@ -145,7 +142,7 @@ class ReplicateAIPoller(ImagePoller):
                 self.model_id,
                 input={
                     "prompt": prompt,
-                    "input_images": [image_bytes],
+                    "input_images": [io.BytesIO(image_bytes)],
                     "aspect_ratio": "match_input_image",
                     "output_format": "jpg",
                     "output_quality": 80,

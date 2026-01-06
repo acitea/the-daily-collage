@@ -371,6 +371,9 @@ class ZoneLayoutComposer:
         if not signals:
             return
 
+        # Randomize order so successive runs reshuffle which signals take the earliest cells
+        random.shuffle(signals)
+
         zone = self.zones[zone_name]
         zone_y_start = int(self.image_height * zone["start_ratio"])
         zone_height = int(self.image_height * zone["height_ratio"])
@@ -464,9 +467,9 @@ class ZoneLayoutComposer:
             cell_center_x = col * cell_width + cell_width // 2
             cell_center_y = zone_y_start + row * cell_height + cell_height // 2
             
-            # Add random offset within cell (±25% of cell size)
-            offset_x = random.randint(-cell_width // 4, cell_width // 4)
-            offset_y = random.randint(-cell_height // 4, cell_height // 4)
+            # Add random offset within cell (±20% of cell size)
+            offset_x = random.randint(-cell_width // 5, cell_width // 5)
+            offset_y = random.randint(-cell_height // 5, cell_height // 5)
             
             x = max(0, min(cell_center_x + offset_x, self.image_width))
             y = max(zone_y_start, min(cell_center_y + offset_y, zone_y_end))
