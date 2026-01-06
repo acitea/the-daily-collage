@@ -170,6 +170,9 @@ Response:"""
         try:
             response = self.call(prompt, max_tokens=800, temperature=0.3)
             
+            # Log response excerpt for debugging
+            logger.debug(f"LLM Response (first 500 chars):\n{response[:500]}")
+            
             # Parse simple text format: "Article 1: category=0.85 category2=0.40"
             result = {}
             
@@ -198,6 +201,12 @@ Response:"""
                     
                     if scores:
                         result[article_num] = scores
+            
+            # If no results, log full response for debugging
+            if not result:
+                logger.warning(f"⚠️  No classifications parsed from LLM. Full response:\n{response[:800]}")
+            else:
+                logger.debug(f"✓ Parsed {len(result)} article classifications from LLM")
             
             return result
             
