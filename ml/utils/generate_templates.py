@@ -115,79 +115,51 @@ class TemplateLLM:
         for i, article in enumerate(articles):
             articles_text.append(f"Article {i+1}:\nTitle: {article['title']}\nDescription: {article.get('description', '')[:300]}")
         
-        prompt = f"""You are classifying Swedish news articles into these categories:
-{', '.join(SIGNAL_CATEGORIES)}
+        prompt = f"""Classify Swedish news articles. For each article, list applicable categories with scores.
 
-For each article, identify which categories apply (0-3 categories per article). Assign confidence scores from 0.0 to 1.0.
+Categories: {', '.join(SIGNAL_CATEGORIES)}
 
-Articles to classify:
+Articles:
 {chr(10).join(articles_text)}
 
-Respond in JSON format ONLY:
-{{
-  "1": {{"category": "confidence", ...}},
-  "2": {{"category": "confidence", ...}},
-  ...
-}}
+Format your response as:
+Article 1: category1=0.85 category2=0.40
+Article 2: category3=0.95
 
-Example: {{"1": {{"emergencies": 0.85, "crime": 0.40}}, "2": {{"sports": 0.95}}}}
-
-JSON:"""
+Response:"""
         
         try:
             response = self.call(prompt, max_tokens=800, temperature=0.3)
             
-            # Extract JSON from response
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            if json_start != -1 and json_end > json_start:
-                json_str = response[json_start:json_end]
-                
-                # Clean common JSON issues from LLM output
-                # Replace unescaped backslashes (but not already escaped ones)
-                json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
-                # Remove control characters that break JSON
-                json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
-                # Replace single quotes with double quotes (common in LLM output)
-                json_str = re.sub(r"'", '"', json_str)
-                # Fix missing commas between key-value pairs (e.g., ": 0.5 "category" -> ": 0.5, "category")
-                json_str = re.sub(r'([0-9.]+)\s+"', r'\1, "', json_str)
-                # Fix escaped quotes inside strings
-                json_str = re.sub(r'\\"', '"', json_str)
-                
-                try:
-                    classifications = json.loads(json_str)
-                except json.JSONDecodeError as je:
-                    logger.warning(f"JSON parse error: {je}. Trying lenient regex parse...")
-                    # Try to extract just the structure we need with regex
-                    pattern = r'"(\d+)"\s*:\s*\{([^}]+)\}'
-                    matches = re.findall(pattern, json_str)
-                    classifications = {}
-                    for article_num, scores_str in matches:
-                        # Extract category:score pairs - more flexible pattern
-                        score_pattern = r'"?([a-z_]+)"?\s*:\s*([0-9.]+)'
-                        scores = {}
-                        for cat, score_str in re.findall(score_pattern, scores_str):
+            # Parse simple text format: "Article 1: category=0.85 category2=0.40"
+            result = {}
+            
+            # Match lines like "Article 1: crime=0.85 emergencies=0.40"
+            pattern = r'Article\s+(\d+)\s*:?\s*(.+)'
+            
+            for line in response.split('\n'):
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    article_num = int(match.group(1))
+                    categories_str = match.group(2)
+                    
+                    # Extract category=score pairs
+                    score_pattern = r'([a-z_]+)\s*[=:]\s*([0-9.]+)'
+                    scores = {}
+                    
+                    for cat, score_str in re.findall(score_pattern, categories_str, re.IGNORECASE):
+                        cat_lower = cat.lower()
+                        if cat_lower in SIGNAL_CATEGORIES:
                             try:
-                                scores[cat] = float(score_str)
+                                scores[cat_lower] = float(score_str)
                             except ValueError:
                                 pass
-                        if scores:
-                            classifications[article_num] = scores
-                
-                # Ensure all scores are floats (LLM might return strings like "0.85")
-                result = {}
-                for k, v in classifications.items():
-                    if isinstance(v, dict):
-                        result[int(k)] = {cat: float(score) if isinstance(score, (int, float, str)) else 0.0 
-                                         for cat, score in v.items()}
-                    else:
-                        result[k] = v
-                
-                return result
-            else:
-                logger.warning("No JSON found in LLM response")
-                return {}
+                    
+                    if scores:
+                        result[article_num] = scores
+            
+            return result
+            
         except Exception as e:
             logger.error(f"Classification failed: {e}")
             return {}
