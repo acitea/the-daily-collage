@@ -46,6 +46,9 @@ class ReplicateAIPoller(ImagePoller):
             num_inference_steps: Number of inference steps
             timeout: Request timeout in seconds
         """
+        if not api_token:
+            raise ValueError("Replicate api_token is required")
+
         self.api_token = api_token
         self.model_id = model_id
         self.guidance_scale = guidance_scale

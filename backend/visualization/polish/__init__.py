@@ -125,62 +125,62 @@ def create_poller(
     Raises:
         ValueError: If provider name not found in registry
     """
+    def _mock_with_reason(reason: str) -> ImagePoller:
+        logger.warning(f"{reason}, using MockImagePoller")
+        return MockImagePoller(image_strength=image_strength)
+
     if not enable_polish:
         logger.info("Polishing disabled, using MockImagePoller")
         return MockImagePoller(image_strength=image_strength)
 
-    provider_name = provider.lower()
+    provider_name = (provider or "stability").lower()
     provider_class = get_provider_class(provider_name)
 
     if provider_class is None:
         available = ", ".join(PROVIDERS.keys())
-        raise ValueError(
-            f"Unknown polish provider '{provider}'. "
-            f"Available providers: {available}"
+        return _mock_with_reason(
+            f"Unknown polish provider '{provider_name}' (available: {available})"
         )
 
     logger.info(f"Using {provider_name.capitalize()} polishing provider")
 
-    # Route to correct provider with appropriate arguments
-    if provider_name == "stability":
-        if not api_key:
-            logger.warning("Stability API key not set, falling back to mock poller")
+    try:
+        if provider_name == "stability":
+            return StabilityAIPoller(
+                api_key=api_key,
+                api_host=api_host,
+                engine_id=engine_id,
+                image_strength=image_strength,
+                cfg_scale=cfg_scale,
+                style_preset=style_preset,
+                sampler=sampler,
+                timeout=timeout,
+            )
+
+        if provider_name == "replicate":
+            return ReplicateAIPoller(
+                api_token=api_token,
+                model_id=replicate_model_id,
+                guidance_scale=guidance_scale,
+                style_preset=style_preset,
+                timeout=timeout,
+            )
+
+        if provider_name == "mock":
+            logger.info("Using mock polishing provider")
             return MockImagePoller(image_strength=image_strength)
 
-        return StabilityAIPoller(
-            api_key=api_key,
-            api_host=api_host,
-            engine_id=engine_id,
-            image_strength=image_strength,
-            cfg_scale=cfg_scale,
-            style_preset=style_preset,
-            sampler=sampler,
-            timeout=timeout,
-        )
-
-    elif provider_name == "replicate":
-        if not api_token:
-            logger.warning("Replicate API token not set, falling back to mock poller")
-            return MockImagePoller(image_strength=image_strength)
-
-        return ReplicateAIPoller(
-            api_token=api_token,
-            model_id=replicate_model_id,
-            image_strength=image_strength,
-            guidance_scale=guidance_scale,
-            style_preset=style_preset,
-            timeout=timeout,
-        )
-
-    elif provider_name == "mock":
-        return MockImagePoller(image_strength=image_strength)
-
-    else:
         # Custom provider - pass all kwargs through
         return provider_class(
             image_strength=image_strength,
             **kwargs,
         )
+
+    except Exception as exc:
+        logger.error(
+            f"Failed to initialize '{provider_name}' polishing provider: {exc}"
+        )
+        return _mock_with_reason("Initialization failed")
 
 
 __all__ = [

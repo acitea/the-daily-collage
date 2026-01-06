@@ -49,6 +49,9 @@ class StabilityAIPoller(ImagePoller):
             sampler: Sampler algorithm (e.g., 'K_DPMPP_2M', 'K_EULER')
             timeout: Request timeout in seconds
         """
+        if not api_key:
+            raise ValueError("Stability AI api_key is required")
+
         self.api_key = api_key
         self.api_host = api_host
         self.engine_id = engine_id

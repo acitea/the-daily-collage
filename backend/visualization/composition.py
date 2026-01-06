@@ -56,30 +56,33 @@ class HybridComposer:
             street_zone_height=settings.layout.street_zone_height,
         )
 
-        # Polish engine - choose provider based on settings
-        if settings.polish.provider == "replicate":
-            logger.info("Polish provider: Replicate AI")
-            self.poller = create_poller(
-                provider="replicate",
-                enable_polish=settings.polish.enable,
-                api_token=settings.replicate_ai.api_token,
-                replicate_model_id=settings.replicate_ai.model_id,
-            )
+        # Polish engine - choose provider based on settings (with graceful fallbacks)
+        provider = settings.polish.provider or "stability"
+        logger.info(f"Polish provider: {provider}")
+
+        base_kwargs = {
+            "provider": provider,
+            "enable_polish": settings.polish.enable,
+        }
+
+        if provider == "stability":
+            stability = vars(settings.stability_ai).copy()
+            stability["engine_id"] = stability.pop("model_id", None)
+            stability["timeout"] = stability.pop("timeout_seconds", None)
+            polish_kwargs = {**base_kwargs, **stability}
+        elif provider == "replicate":
+            replicate_settings = vars(settings.replicate_ai).copy()
+            stability = vars(settings.stability_ai).copy()
+            replicate_settings["replicate_model_id"] = replicate_settings.pop("model_id", None)
+            replicate_settings["timeout"] = stability.get("timeout_seconds")
+            replicate_settings.setdefault("image_strength", stability.get("image_strength"))
+            replicate_settings.setdefault("style_preset", stability.get("style_preset"))
+            polish_kwargs = {**base_kwargs, **replicate_settings}
         else:
-            # Default to Stability AI
-            logger.info("Polish provider: Stability AI")
-            self.poller = create_poller(
-                provider="stability",
-                enable_polish=settings.polish.enable,
-                api_key=settings.stability_ai.api_key,
-                api_host=settings.stability_ai.api_host,
-                engine_id=settings.stability_ai.model_id,
-                image_strength=settings.stability_ai.image_strength,
-                cfg_scale=settings.stability_ai.cfg_scale,
-                style_preset=settings.stability_ai.style_preset,
-                sampler=settings.stability_ai.sampler,
-                timeout=settings.stability_ai.timeout_seconds,
-            )
+            stability = vars(settings.stability_ai).copy()
+            polish_kwargs = {**base_kwargs, **stability}
+
+        self.poller = create_poller(**polish_kwargs)
 
     def compose(
         self,
