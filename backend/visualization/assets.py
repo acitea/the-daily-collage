@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
-from backend.types import (
+from _types import (
     SignalCategory,
     SignalTag,
     IntensityLevel,
@@ -113,9 +113,6 @@ class AssetLibrary:
         ("emergencies", "med"): "emergency_generic_med.png",
         ("emergencies", "high"): "emergency_generic_high.png",
     }
-
-    # Ultimate fallback
-    ULTIMATE_FALLBACK = "generic_default.png"
     
     @staticmethod
     def get_intensity_level(intensity: float) -> IntensityLevel:
@@ -173,37 +170,30 @@ class AssetLibrary:
         # Try exact match first (category, tag, intensity_level)
         asset_key = (category.value, tag.value, intensity_level.value)
         filename = self.ASSET_MAP.get(asset_key)
+        # Try to load from disk
+        asset_path = self.assets_dir / filename
 
-        if not filename and use_fallback:
+        if not (filename and asset_path.exists()) and use_fallback:
             logger.warning(f"Asset not found for {asset_key}, trying fallback generic")
             # Fall back to generic tag with same intensity level
             fallback_key = (category.value, intensity_level.value)
             filename = self.CATEGORY_INTENSITY_FALLBACK.get(fallback_key)
-            
-        if not filename and use_fallback:
-            # Ultimate fallback
-            filename = self.ULTIMATE_FALLBACK
+            asset_path = self.assets_dir / filename
 
         if not filename:
+            logger.debug(f"Asset file not found: {filename}")
             return None
 
         # Check cache
         if filename in self.loaded_assets:
             return self.loaded_assets[filename]
 
-        # Try to load from disk
-        asset_path = self.assets_dir / filename
-        if asset_path.exists():
-            try:
-                img = Image.open(asset_path).convert("RGBA")
-                self.loaded_assets[filename] = img
-                return img
-            except Exception as e:
-                logger.error(f"Failed to load asset {filename}: {e}")
-                self.loaded_assets[filename] = None
-                return None
-        else:
-            logger.debug(f"Asset file not found: {asset_path}")
+        try:
+            img = Image.open(asset_path).convert("RGBA")
+            self.loaded_assets[filename] = img
+            return img
+        except Exception as e:
+            logger.error(f"Failed to load asset {filename}: {e}")
             self.loaded_assets[filename] = None
             return None
 
@@ -450,7 +440,7 @@ class ZoneLayoutComposer:
                     col, row = random.choice(list(fallback_cells))
                     used_cells.add((col, row))
                     cell_assigned = True
-                    logger.debug(f"Placing {signal.category.value}/{signal.tag.value} in fallback zone around high intensity asset")
+                    logger.debug(f"Placing {signal.category.value}/{signal.tag.value}/{signal.intensity.value} in fallback zone around high intensity asset")
             
             if not cell_assigned:
                 logger.warning(f"No available cells in zone {zone_name}, skipping signal {signal.category.value}/{signal.tag.value}")
@@ -484,16 +474,16 @@ class ZoneLayoutComposer:
             # Get asset (pre-sized based on intensity level)
             asset = self.asset_library.get_asset(signal.category, signal.tag, signal.intensity)
             if not asset:
-                logger.debug(f"No asset for {signal.category.value}/{signal.tag.value}, skipping")
+                logger.debug(f"No asset for {signal.category.value}/{signal.tag.value}/{signal.intensity.value}, skipping")
                 continue
             else:
-                logger.debug(f"Placing asset for {signal.category.value}/{signal.tag.value} at cell ({col}, {row})")
+                logger.debug(f"Placing asset for {signal.category.value}/{signal.tag.value}/{signal.intensity.value} at cell ({col}, {row})")
 
             # Resize asset to fit between 1x and 1.5x the entire zone height while preserving aspect ratio
             # This creates size variation while keeping assets proportional to the entire zone
             original_width, original_height = asset.size
             if original_height > 0:
-                scale_factor = random.uniform(1.0, 1.5)
+                scale_factor = random.uniform(0.7, 1.2)
                 target_height = int(zone_height * scale_factor)
                 new_width = int(original_width * (target_height / original_height))
                 asset = asset.resize((new_width, target_height), Image.Resampling.LANCZOS)

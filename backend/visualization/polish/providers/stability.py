@@ -12,8 +12,8 @@ from typing import Optional
 import requests
 from PIL import Image
 
-from backend.visualization.polish.base import ImagePoller
-from backend.visualization.polish.utils import prepare_image
+from visualization.polish.base import ImagePoller
+from visualization.polish.utils import prepare_image
 
 logger = logging.getLogger(__name__)
 

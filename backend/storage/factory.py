@@ -5,8 +5,8 @@ Factory for creating storage backends based on configuration.
 import logging
 from typing import Optional
 
-from backend.storage.core import StorageBackend
-from backend.storage.providers import (
+from storage.core import StorageBackend
+from storage.providers import (
     HopsworksStorageBackend,
     LocalStorageBackend,
     MockS3StorageBackend,
@@ -23,7 +23,7 @@ def create_storage_backend(
     artifact_collection: str = "vibe_images",
 ) -> StorageBackend:
     """
-    Factory function to create appropriate storage backend.
+    Factory function to create appropriate storage 
 
     Args:
         backend_type: Type of backend ('local', 's3', 'minio', 'hopsworks')

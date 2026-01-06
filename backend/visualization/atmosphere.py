@@ -7,7 +7,7 @@ and signal composition for use in img2img enhancement.
 
 from typing import List, Tuple, Dict, Optional
 
-from backend.types import Signal, SignalCategory
+from _types import Signal, SignalCategory
 
 
 class AtmosphereDescriptor:

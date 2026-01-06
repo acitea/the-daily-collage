@@ -9,7 +9,7 @@ from .composition import (
     HybridComposer,
     SignalIntensity,
 )
-from backend.types import (
+from _types import (
     Signal,
     SignalCategory,
     SignalTag,
@@ -21,8 +21,6 @@ from .assets import (
     ZoneLayoutComposer,
 )
 from .polish import (
-    StabilityAIPoller,
-    MockStabilityAIPoller,
     create_poller,
 )
 from .atmosphere import (
@@ -41,7 +39,5 @@ __all__ = [
     "SignalCategory",
     "SignalTag",
     "IntensityLevel",
-    "StabilityAIPoller",
-    "MockStabilityAIPoller",
     "create_poller",
 ]

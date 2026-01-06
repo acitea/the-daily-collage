@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from backend.storage.core import CacheMetadata, StorageBackend, VibeHash
+from storage.core import CacheMetadata, StorageBackend, VibeHash
 
 logger = logging.getLogger(__name__)
 

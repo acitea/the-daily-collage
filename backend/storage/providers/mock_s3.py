@@ -5,7 +5,7 @@ Mock S3 storage backend for testing/development.
 import logging
 from typing import Dict, Optional
 
-from backend.storage.core import CacheMetadata, StorageBackend
+from storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
 

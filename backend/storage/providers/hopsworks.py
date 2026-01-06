@@ -1,5 +1,5 @@
 """
-Hopsworks dataset storage backend.
+Hopsworks dataset storage 
 
 Delegates to HopsworksService for all Hopsworks operations.
 Stores images and metadata in the Resources dataset under a specified directory.
@@ -10,15 +10,15 @@ import json
 import logging
 from typing import Optional
 
-from backend.server.services.hopsworks import HopsworksService
-from backend.storage.core import CacheMetadata, StorageBackend
+from server.services.hopsworks import HopsworksService
+from storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
 
 
 class HopsworksStorageBackend(StorageBackend):
     """
-    Hopsworks dataset storage backend.
+    Hopsworks dataset storage 
 
     Stores images and metadata in Hopsworks Resources dataset.
     Delegates all Hopsworks operations to HopsworksService.
@@ -26,7 +26,7 @@ class HopsworksStorageBackend(StorageBackend):
 
     def __init__(self, hopsworks_service: HopsworksService, artifact_collection: str = "vibe_images"):
         """
-        Initialize Hopsworks storage backend.
+        Initialize Hopsworks storage 
 
         Args:
             hopsworks_service: Instance of HopsworksService for dataset operations

@@ -1,5 +1,5 @@
 """
-Local file system storage backend.
+Local file system storage 
 """
 
 import json
@@ -7,14 +7,14 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from backend.storage.core import CacheMetadata, StorageBackend
+from storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
 
 
 class LocalStorageBackend(StorageBackend):
     """
-    Local file system storage backend.
+    Local file system storage 
 
     Stores images in {storage_dir}/images/ and metadata in {storage_dir}/metadata.json
     """

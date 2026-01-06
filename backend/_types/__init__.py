@@ -1,7 +1,7 @@
 """
 The Daily Collage - Common Type Definitions
 
-Centralized type definitions used throughout the backend.
+Centralized type definitions used throughout the 
 """
 
 from .signal import (

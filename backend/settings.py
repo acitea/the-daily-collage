@@ -171,9 +171,9 @@ class LayoutSettings:
     image_height: int = 768
 
     # Canvas zones (as fractions of height)
-    sky_zone_height: float = 0.50
-    city_zone_height: float = 0.20
-    street_zone_height: float = 0.30
+    sky_zone_height: float = 0.30
+    city_zone_height: float = 0.35
+    street_zone_height: float = 0.35
 
 @dataclass
 class APISettings:
@@ -189,7 +189,7 @@ class Settings:
     Global settings container combining all configuration sections.
 
     Usage:
-        from backend.settings import settings
+        from settings import settings
         print(settings.stability_ai.api_key)
         print(settings.storage.backend)
     """

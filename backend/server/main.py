@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse, Response, FileResponse
 
 # Ensure project root is on the Python path for absolute imports
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = PROJECT_ROOT / "backend"
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -41,11 +41,11 @@ app = FastAPI(
 
 # Import modules
 try:
-    from backend.visualization.composition import VisualizationService
-    from backend.server.services.hopsworks import get_or_create_hopsworks_service
-    from backend.server.services.backfill import trigger_backfill_ingestion
-    from backend.settings import settings
-    from backend.types import (
+    from visualization.composition import VisualizationService
+    from server.services.hopsworks import get_or_create_hopsworks_service
+    from server.services.backfill import trigger_backfill_ingestion
+    from settings import settings
+    from _types import (
         Hitbox,  # Use Hitbox directly (HitboxData removed)
         VibeVectorRequest,
         VisualizationResponse,
@@ -236,7 +236,7 @@ async def get_vibe(
     
     try:
         # Import VibeHash for parsing cache_key
-        from backend.storage.core import VibeHash
+        from storage.core import VibeHash
         
         # Parse cache_key to extract city and timestamp
         cache_info = VibeHash.extract_info(cache_key)
@@ -420,7 +420,7 @@ async def generate_cache_key(
         Returns: {"cache_key": "stockholm_2026-01-03_12-18", "city": "stockholm", ...}
     """
     try:
-        from backend.storage.core import VibeHash
+        from storage.core import VibeHash
         
         # Parse timestamp or use current
         if timestamp:
@@ -497,7 +497,7 @@ async def get_visualization_image(
         logger.info(f"Image not found for {cache_key}, attempting regeneration")
         
         # Parse cache_key to get city and timestamp
-        from backend.storage.core import VibeHash
+        from storage.core import VibeHash
         cache_info = VibeHash.extract_info(cache_key)
         
         if not cache_info:
@@ -588,7 +588,7 @@ async def check_cache_status(
 
         cached = viz_service.cache.exists(city, timestamp)
 
-        from backend.storage import VibeHash
+        from storage import VibeHash
         cache_key = VibeHash.generate(city, timestamp)
 
         return CacheStatusResponse(
@@ -662,7 +662,7 @@ async def get_articles_for_vibe(cache_key: str):
 
     try:
         # Parse cache_key to extract city and timestamp
-        from backend.storage.core import VibeHash
+        from storage.core import VibeHash
         cache_info = VibeHash.extract_info(cache_key)
         
         if not cache_info:

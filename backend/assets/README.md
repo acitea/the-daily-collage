@@ -146,7 +146,7 @@ Test your assets with:
 ```bash
 cd backend/server
 python -c "
-from backend.visualization.assets import AssetLibrary
+from visualization.assets import AssetLibrary
 lib = AssetLibrary('../assets')
 img = lib.get_asset('emergencies', 'fire', 0.8)
 if img:

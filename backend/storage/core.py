@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from backend.visualization.assets import Hitbox
+from visualization.assets import Hitbox
 
 logger = logging.getLogger(__name__)
 

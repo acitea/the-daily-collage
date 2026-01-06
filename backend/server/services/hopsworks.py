@@ -14,7 +14,7 @@ from hopsworks.project import Project
 from hopsworks.core.dataset_api import DatasetApi
 from hsfs.feature_store import FeatureStore
 
-from backend.types import SignalCategory
+from _types import SignalCategory
 
 logger = logging.getLogger(__name__)
 instance = None

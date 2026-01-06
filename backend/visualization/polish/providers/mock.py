@@ -7,7 +7,7 @@ Returns the input image unchanged, simulating successful polish.
 import logging
 from typing import Optional
 
-from backend.visualization.polish.base import ImagePoller
+from visualization.polish.base import ImagePoller
 
 logger = logging.getLogger(__name__)
 

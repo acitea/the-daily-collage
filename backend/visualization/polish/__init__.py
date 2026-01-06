@@ -5,7 +5,7 @@ Provides factory function to create polishing providers and registry
 for extending with custom providers.
 
 Usage:
-    from backend.visualization.polish import create_poller
+    from visualization.polish import create_poller
 
     poller = create_poller(
         provider="stability",
@@ -19,13 +19,13 @@ Usage:
 import logging
 from typing import Optional, Dict, Type
 
-from backend.visualization.polish.base import ImagePoller
-from backend.visualization.polish.providers import (
+from .base import ImagePoller
+from .providers import (
     StabilityAIPoller,
     ReplicateAIPoller,
     MockImagePoller,
 )
-from backend.visualization.polish.utils import (
+from .utils import (
     prepare_image,
     image_to_base64,
     get_image_dimensions,

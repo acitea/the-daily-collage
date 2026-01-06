@@ -18,7 +18,7 @@ from backend.storage import (
     LocalStorageBackend,
     MockS3StorageBackend,
 )
-from backend.types import Signal, SignalCategory, SignalTag, IntensityLevel
+from backend._types import Signal, SignalCategory, SignalTag, IntensityLevel
 from backend.visualization.assets import ZoneLayoutComposer
 from backend.visualization.polish import MockStabilityAIPoller
 

@@ -15,12 +15,12 @@ from datetime import datetime
 from PIL import Image
 import io
 
-from backend.settings import settings
-from backend.types import Signal, SignalCategory, SignalTag
-from backend.visualization.assets import AssetLibrary, ZoneLayoutComposer
-from backend.visualization.polish import create_poller
-from backend.storage import VibeCache, create_storage_backend
-from backend.visualization.atmosphere import AtmosphereDescriptor
+from settings import settings
+from _types import Signal, SignalCategory, SignalTag
+from visualization.assets import AssetLibrary, ZoneLayoutComposer
+from visualization.polish import create_poller
+from storage import VibeCache, create_storage_backend
+from visualization.atmosphere import AtmosphereDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class HybridComposer:
             intensity = abs(score)
             
             # Filter out insignificant signals
-            if intensity < 0.1:
+            if intensity <= 0.15:
                 continue
             
             # Convert category string to enum
@@ -233,7 +233,7 @@ class VisualizationService:
 
         if use_hopsworks:
             logger.info("Using Hopsworks storage backend")
-            from backend.server.services.hopsworks import get_or_create_hopsworks_service
+            from server.services.hopsworks import get_or_create_hopsworks_service
 
             self.hopsworks_service = get_or_create_hopsworks_service(
                 api_key=settings.hopsworks.api_key,
