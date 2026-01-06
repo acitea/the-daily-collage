@@ -51,27 +51,28 @@ SIGNAL_CATEGORIES = [
 class TemplateLLM:
     """Wrapper for local LLM to generate templates and keywords."""
     
-    def __init__(self, model_name: str = "mistralai/Mistral-7B-Instruct-v0.2"):
+    def __init__(self, model_name: str = "microsoft/phi-2"):
         logger.info(f"Loading LLM: {model_name}...")
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
-        # Use 4-bit quantization for CUDA to fit in 12GB VRAM (7B model needs ~4GB in 4-bit)
+        # Phi-2 is 2.7B (much faster than 7B), fits in 12GB without quantization
         if torch.cuda.is_available():
-            logger.info("Using 4-bit quantization for GPU (12GB VRAM compatible)")
+            logger.info("Using float16 on GPU (Phi-2 2.7B is fast & memory-efficient)")
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                load_in_4bit=True,
+                torch_dtype=torch.float16,
                 device_map="auto",
                 low_cpu_mem_usage=True,
-                torch_dtype=torch.float16,
+                trust_remote_code=True,
             )
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=torch.float32,
                 low_cpu_mem_usage=True,
+                trust_remote_code=True,
             )
             self.model.to(self.device)
         
@@ -80,7 +81,8 @@ class TemplateLLM:
     
     def call(self, prompt: str, max_tokens: int = 1500, temperature: float = 0.5) -> str:
         """Generate response from LLM."""
-        formatted_prompt = f"[INST] {prompt} [/INST]"
+        # Phi-2 uses this format
+        formatted_prompt = f"Instruct: {prompt}\nOutput:"
         
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=4096)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -161,8 +163,16 @@ JSON:"""
                         scores = dict(re.findall(score_pattern, scores_str))
                         classifications[article_num] = {k: float(v) for k, v in scores.items()}
                 
-                # Convert string keys to int
-                return {int(k): v for k, v in classifications.items()}
+                # Ensure all scores are floats (LLM might return strings like "0.85")
+                result = {}
+                for k, v in classifications.items():
+                    if isinstance(v, dict):
+                        result[int(k)] = {cat: float(score) if isinstance(score, (int, float, str)) else 0.0 
+                                         for cat, score in v.items()}
+                    else:
+                        result[k] = v
+                
+                return result
             else:
                 logger.warning("No JSON found in LLM response")
                 return {}
@@ -343,8 +353,8 @@ def generate_templates_and_keywords(
     logger.info("Classifying articles into categories...")
     categorized_articles = defaultdict(list)
     
-    # Reduce batch size for 4-bit model to avoid memory spikes
-    batch_size = 5
+    # Phi-2 is fast and lightweight, can use larger batch size
+    batch_size = 16
     for i in tqdm(range(0, len(articles), batch_size), desc="Classifying"):
         batch = articles[i:i+batch_size]
         classifications = llm.classify_article_batch(batch)
@@ -434,8 +444,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate signal templates and keywords from GDELT")
     parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch")
     parser.add_argument("--country", type=str, default="sweden", help="Country filter")
-    parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2", 
-                        help="LLM model name")
+    parser.add_argument("--model", type=str, default="microsoft/phi-2", 
+                        help="LLM model name (default: Phi-2 2.7B, much faster than Mistral-7B)")
     parser.add_argument("--templates-per-category", type=int, default=30, 
                         help="Number of template phrases per category")
     parser.add_argument("--keywords-per-category", type=int, default=25, 
