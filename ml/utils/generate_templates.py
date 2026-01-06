@@ -120,8 +120,8 @@ class TemplateLLM:
     
     def call(self, prompt: str, max_tokens: int = 1500, temperature: float = 0.5) -> str:
         """Generate response from LLM."""
-        # Phi-2 uses this format
-        formatted_prompt = f"Instruct: {prompt}\nOutput:"
+        # Use a more direct format for structured tasks
+        formatted_prompt = prompt
         
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=4096)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -154,21 +154,20 @@ class TemplateLLM:
         for i, article in enumerate(articles):
             articles_text.append(f"Article {i+1}:\nTitle: {article['title']}\nDescription: {article.get('description', '')[:300]}")
         
-        prompt = f"""Classify Swedish news articles. For each article, list applicable categories with scores.
+        prompt = f"""Task: Classify each article into categories. Output ONLY the format below. NO explanations, NO code, NO extra text.
 
 Categories: {', '.join(SIGNAL_CATEGORIES)}
 
-Articles:
 {chr(10).join(articles_text)}
 
-Format your response as:
-Article 1: category1=0.85 category2=0.40
-Article 2: category3=0.95
+OUTPUT FORMAT (EXACTLY THIS FORMAT, NOTHING ELSE):
+Article 1: crime=0.85
+Article 2: sports=0.90 economics=0.40
 
-Response:"""
+YOUR OUTPUT:"""
         
         try:
-            response = self.call(prompt, max_tokens=800, temperature=0.3)
+            response = self.call(prompt, max_tokens=800, temperature=0.0)
             
             # Log response excerpt for debugging
             logger.debug(f"LLM Response (first 500 chars):\n{response[:500]}")
@@ -231,20 +230,15 @@ Response:"""
         
         articles_text = [f"{i+1}. {a['title']}" for i, a in enumerate(sample_articles)]
         
-        prompt = f"""You are analyzing Swedish news articles about "{category}".
-
-Extract {max_templates} SHORT representative phrases (5-15 words each) that describe typical "{category}" news.
-These phrases should be SPECIFIC and DESCRIPTIVE, capturing the semantic essence of this category.
+        prompt = f"""Extract {max_templates} short Swedish news phrases about {category}.
 
 Articles:
 {chr(10).join(articles_text)}
 
-Respond with ONLY a numbered list of phrases (no explanations):
-1. [phrase]
-2. [phrase]
-...
-
-List:"""
+OUTPUT (NO EXPLANATIONS, JUST THE LIST):
+1. 
+2. 
+3. """
         
         try:
             response = self.call(prompt, max_tokens=600, temperature=0.6)
