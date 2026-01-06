@@ -57,39 +57,36 @@ class NewsSignalClassifierInference:
 
     def _build_model(self, base_model: str) -> nn.Module:
         """Build model architecture (mirrors training model)."""
-        bert = AutoModel.from_pretrained(base_model)
-        hidden_size = 768
-
-        # Score heads
-        score_heads = nn.ModuleDict({
-            cat: nn.Sequential(
-                nn.Linear(hidden_size, 128),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(128, 1),
-                nn.Tanh()
-            )
-            for cat in SIGNAL_CATEGORIES
-        })
-
-        # Tag heads
-        tag_heads = nn.ModuleDict({
-            cat: nn.Sequential(
-                nn.Linear(hidden_size, 128),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(128, len(TAG_VOCAB[cat]))
-            )
-            for cat in SIGNAL_CATEGORIES
-        })
-
-        # Combine into module
-        class Model(nn.Module):
-            def __init__(self):
+        
+        class QuickNewsClassifier(nn.Module):
+            """Exact replica of training model."""
+            def __init__(self, base_model: str = "KB/bert-base-swedish-cased"):
                 super().__init__()
-                self.bert = bert
-                self.score_heads = score_heads
-                self.tag_heads = tag_heads
+                self.bert = AutoModel.from_pretrained(base_model)
+                hidden_size = 768
+
+                # Score heads (regression)
+                self.score_heads = nn.ModuleDict({
+                    cat: nn.Sequential(
+                        nn.Linear(hidden_size, 128),
+                        nn.ReLU(),
+                        nn.Dropout(0.1),
+                        nn.Linear(128, 1),
+                        nn.Tanh()
+                    )
+                    for cat in SIGNAL_CATEGORIES
+                })
+
+                # Tag heads (classification)
+                self.tag_heads = nn.ModuleDict({
+                    cat: nn.Sequential(
+                        nn.Linear(hidden_size, 128),
+                        nn.ReLU(),
+                        nn.Dropout(0.1),
+                        nn.Linear(128, len(TAG_VOCAB[cat]))
+                    )
+                    for cat in SIGNAL_CATEGORIES
+                })
 
             def forward(self, input_ids, attention_mask):
                 outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
@@ -103,7 +100,7 @@ class NewsSignalClassifierInference:
 
                 return results
 
-        return Model()
+        return QuickNewsClassifier(base_model)
 
     @torch.no_grad()
     def classify(self, title: str, description: str = "") -> Dict[str, Tuple[float, str]]:

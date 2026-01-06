@@ -49,18 +49,20 @@ def classify_articles_batch_with_llm(
     max_llm_calls: int = None,
     max_categories: int = 2,
     max_batch_size: int = 15,
+    initial_classification: bool = False,
 ) -> dict:
     """
-    Use LLM to verify and correct multiple articles in a single batch call.
+    Use LLM to classify (initial) or verify (refinement) multiple articles in a single batch call.
     
     Args:
-        articles: List of {title, description, signals, detected_count} dicts
+        articles: List of {title, description, signals, detected_count} or {title, description} dicts
         llm_call_count: Dict tracking {'calls': N} for cost control
         max_llm_calls: Maximum LLM API calls allowed
         max_categories: Max number of categories to keep after LLM pruning
+        initial_classification: If True, classify from scratch; if False, verify existing signals
         
     Returns:
-        Dict mapping article index to corrected signals
+        Dict mapping article index to classified/verified signals
     """
     if llm_call_count is None:
         llm_call_count = {'calls': 0}
@@ -75,6 +77,14 @@ def classify_articles_batch_with_llm(
     # Trim batch size to stay within context
     articles = articles[:max_batch_size]
 
+    # For verification phase: pre-filter weak signals (noise reduction)
+    if not initial_classification:
+        for article in articles:
+            if "signals" in article:
+                weak_cats = [cat for cat, (score, _) in article["signals"].items() if abs(score) < 0.25]
+                for cat in weak_cats:
+                    article["signals"][cat] = (0.0, "")
+
     # Increment call counter
     llm_call_count['calls'] += 1
     
@@ -86,23 +96,67 @@ def classify_articles_batch_with_llm(
         for i, article in enumerate(articles):
             title = article["title"][:140]
             desc = article["description"][:280]  # Tight truncation to reduce tokens
-            signals = article["signals"]
             
-            current_signals = {}
-            for cat in SIGNAL_CATEGORIES:
-                if cat in signals:
-                    score, tag = signals[cat]
-                    if abs(score) > 0.01:
-                        current_signals[cat] = {"score": float(score), "tag": str(tag)}
-            
-            articles_text += f"""
+            if initial_classification:
+                # For initial classification, no current signals
+                articles_text += f"""
+ARTICLE {i+1}:
+Title: {title}
+Description: {desc}...
+---"""
+            else:
+                # For verification, show current signals
+                signals = article["signals"]
+                current_signals = {}
+                for cat in SIGNAL_CATEGORIES:
+                    if cat in signals:
+                        score, tag = signals[cat]
+                        if abs(score) > 0.01:
+                            current_signals[cat] = {"score": float(score), "tag": str(tag)}
+                
+                articles_text += f"""
 ARTICLE {i+1}:
 Title: {title}
 Description: {desc}...
 Current Classifications: {json.dumps(current_signals) if current_signals else '(no signals)'}
 ---"""
         
-        prompt = f"""Analyze {len(articles)} news articles and correct signal detections.
+        if initial_classification:
+            prompt = f"""Classify {len(articles)} news articles into signal categories. ASSIGN AT MOST {max_categories} categories per article.
+READ THE ARTICLE TITLE AND DESCRIPTION CAREFULLY. Be precise and concise.
+
+{articles_text}
+
+Signal Categories (assign 0-{max_categories} categories per article):
+- emergencies: natural disasters, accidents, extreme weather impacts (score: -1 to -0.5 for severe)
+- crime: criminal incidents, violence, arrests (score: -1 to -0.5 for serious)
+- festivals: cultural events, celebrations, entertainment (score: 0.3 to 1 for positive)
+- transportation: traffic accidents, transit issues (score: -0.5 to 0 for problems)
+- weather_temp: temperature extremes, heat waves, cold snaps (score: -0.8 to 0)
+- weather_wet: rain, flooding, snow, storms (score: -0.8 to 0)
+- sports: ONLY sporting events/competitions/achievements; ignore if article is NOT about sports
+- economics: markets, business, employment (score: -0.8 to 1)
+- politics: elections, policy, governance (score: -0.5 to 1)
+
+For each article:
+1) READ THE TITLE AND DESCRIPTION CAREFULLY.
+2) Assign only categories that are DIRECTLY relevant to the article topic.
+3) Provide appropriate scores (negative for problems, positive for positive events).
+4) Provide a concise tag describing the specific event (e.g., "fire", "protest", "heatwave").
+5) Do NOT exceed {max_categories} categories per article.
+
+Return ONLY valid JSON:
+{{
+  "results": [
+    {{
+      "article": 1,
+      "classifications": {{"category": {{"score": -0.8, "tag": "tag"}}, ...}}
+    }},
+    ...
+  ]
+}}"""
+        else:
+            prompt = f"""Verify and correct signal detections in {len(articles)} news articles. AGGRESSIVELY correct and prune.
 
 {articles_text}
 
@@ -113,17 +167,18 @@ Signal Categories:
 - transportation: traffic accidents, transit issues (score: -0.5 to 0 for problems)
 - weather_temp: temperature extremes, heat waves, cold snaps (score: -0.8 to 0)
 - weather_wet: rain, flooding, snow, storms (score: -0.8 to 0)
-- sports: sporting events, competitions, achievements (score: -0.5 to 1)
+- sports: ONLY sporting events/competitions/achievements; remove if article is NOT about sports
 - economics: markets, business, employment (score: -0.8 to 1)
 - politics: elections, policy, governance (score: -0.5 to 1)
 
 For each article (keep at most {max_categories} categories total):
-1) Remove weak/irrelevant categories.
-2) Adjust scores if too strong/weak; negative = bad/problem, positive = good/success.
-3) Remove wrong categories; add only clearly justified missing ones.
-4) If more than {max_categories} categories remain, keep the strongest and zero the rest.
+1) READ THE ARTICLE TITLE AND DESCRIPTION CAREFULLY.
+2) Remove ANY signal that does NOT match the actual article topic. Be aggressive.
+3) Remove weak signals (score < 0.3 in absolute value).
+4) If signal remains, ensure score and tag match content.
+5) If more than {max_categories} categories remain, keep only the strongest and zero the rest.
 
-Return ONLY valid JSON (one object per article):
+Return ONLY valid JSON:
 {{
   "results": [
     {{
@@ -134,9 +189,7 @@ Return ONLY valid JSON (one object per article):
     }},
     ...
   ]
-}}
-
-If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals": [], "additions": {{}}}}"""
+}}"""
 
         client = openai.OpenAI()
         response = client.chat.completions.create(
@@ -147,68 +200,103 @@ If no changes for an article, use empty dicts: {{"corrections": {{}}, "removals"
         )
         
         result_text = response.choices[0].message.content.strip()
-        logger.debug(f"LLM batch verification #{llm_call_count['calls']}: {len(articles)} articles")
+        phase = "initial classification" if initial_classification else "verification"
+        logger.info(f"LLM batch {phase} #{llm_call_count['calls']}: {len(articles)} articles")
 
         # Parse response with resilient JSON extractor
         result = _safe_parse_llm_json(result_text)
         if result is None:
-            logger.warning(f"LLM batch verification JSON parse failed; raw response truncated: {result_text[:240]}")
-            return {i: article["signals"] for i, article in enumerate(articles)}
+            logger.warning(f"LLM batch {phase} JSON parse failed; raw response truncated: {result_text[:240]}")
+            if initial_classification:
+                # Return empty signals for failed initial classification
+                return {i: {} for i, article in enumerate(articles)}
+            else:
+                # Return existing signals for failed verification
+                return {i: article["signals"] for i, article in enumerate(articles)}
+        
         batch_corrections = {}
         
-        for item in result.get("results", []):
-            article_idx = item.get("article", 1) - 1  # Convert to 0-indexed
-            
-            if article_idx < len(articles):
-                article = articles[article_idx]
-                verified_signals = article["signals"].copy()
+        if initial_classification:
+            # Process initial classifications
+            for item in result.get("results", []):
+                article_idx = item.get("article", 1) - 1  # Convert to 0-indexed
                 
-                # Apply corrections
-                for category, correction in item.get("corrections", {}).items():
-                    if category in verified_signals:
-                        new_score = correction.get("score", verified_signals[category][0])
-                        new_tag = correction.get("tag", verified_signals[category][1])
-                        verified_signals[category] = (float(new_score), str(new_tag))
-                        logger.debug(f"  Article {article_idx+1} → Corrected {category}")
+                if article_idx < len(articles):
+                    verified_signals = {}
+                    
+                    # Extract classifications
+                    for category, signal_info in item.get("classifications", {}).items():
+                        score = signal_info.get("score", 0.0)
+                        tag = signal_info.get("tag", "")
+                        if abs(score) > 0.01:
+                            verified_signals[category] = (float(score), str(tag))
+                            logger.info(f"  Article {article_idx+1} → Classified {category} (score: {score:.2f})")
+                    
+                    batch_corrections[article_idx] = verified_signals
+        else:
+            # Process verification corrections (existing logic)
+            for item in result.get("results", []):
+                article_idx = item.get("article", 1) - 1  # Convert to 0-indexed
                 
-                # Apply removals
-                for category in item.get("removals", []):
-                    if category in verified_signals:
-                        verified_signals[category] = (0.0, "")
-                        logger.debug(f"  Article {article_idx+1} → Removed {category}")
-                
-                # Apply additions
-                for category, signal_info in item.get("additions", {}).items():
-                    if category not in verified_signals or abs(verified_signals[category][0]) < 0.01:
-                        score = signal_info.get("score", 0.5)
-                        tag = signal_info.get("tag", category)
-                        verified_signals[category] = (float(score), str(tag))
-                        logger.debug(f"  Article {article_idx+1} → Added {category}")
-                
-                # Prune to strongest categories
-                if len([c for c, (s, _) in verified_signals.items() if abs(s) > 0.01]) > max_categories:
-                    sorted_cats = sorted(
-                        verified_signals.items(),
-                        key=lambda kv: abs(kv[1][0]),
-                        reverse=True,
-                    )
-                    keep = set(cat for cat, _ in sorted_cats[:max_categories])
-                    for cat in list(verified_signals.keys()):
-                        if cat not in keep:
-                            verified_signals[cat] = (0.0, "")
-                    logger.debug(f"  Article {article_idx+1} → Pruned to top {max_categories}")
-                batch_corrections[article_idx] = verified_signals
+                if article_idx < len(articles):
+                    article = articles[article_idx]
+                    verified_signals = article["signals"].copy()
+                    
+                    # Apply corrections
+                    for category, correction in item.get("corrections", {}).items():
+                        if category in verified_signals:
+                            new_score = correction.get("score", verified_signals[category][0])
+                            new_tag = correction.get("tag", verified_signals[category][1])
+                            verified_signals[category] = (float(new_score), str(new_tag))
+                            logger.info(f"  Article {article_idx+1} → Corrected {category}")
+                    
+                    # Apply removals
+                    for category in item.get("removals", []):
+                        if category in verified_signals:
+                            verified_signals[category] = (0.0, "")
+                            logger.info(f"  Article {article_idx+1} → Removed {category}")
+                    
+                    # Apply additions
+                    for category, signal_info in item.get("additions", {}).items():
+                        if category not in verified_signals or abs(verified_signals[category][0]) < 0.01:
+                            score = signal_info.get("score", 0.5)
+                            tag = signal_info.get("tag", category)
+                            verified_signals[category] = (float(score), str(tag))
+                            logger.info(f"  Article {article_idx+1} → Added {category}")
+                    
+                    # Prune to strongest categories
+                    active_cats = [c for c, (s, _) in verified_signals.items() if abs(s) > 0.01]
+                    if len(active_cats) > max_categories:
+                        sorted_cats = sorted(
+                            verified_signals.items(),
+                            key=lambda kv: abs(kv[1][0]),
+                            reverse=True,
+                        )
+                        keep = set(cat for cat, _ in sorted_cats[:max_categories])
+                        removed_count = 0
+                        for cat in list(verified_signals.keys()):
+                            if cat not in keep and abs(verified_signals[cat][0]) > 0.01:
+                                verified_signals[cat] = (0.0, "")
+                                removed_count += 1
+                        logger.info(f"  Article {article_idx+1} → Pruned from {len(active_cats)} to {max_categories} categories (removed {removed_count})")
+                    batch_corrections[article_idx] = verified_signals
         
-        # Fill in missing articles (no corrections)
+        # Fill in missing articles
         for i in range(len(articles)):
             if i not in batch_corrections:
-                batch_corrections[i] = articles[i]["signals"]
+                if initial_classification:
+                    batch_corrections[i] = {}
+                else:
+                    batch_corrections[i] = articles[i]["signals"]
         
         return batch_corrections
         
     except Exception as e:
-        logger.warning(f"LLM batch verification failed: {e}")
-        return {i: article["signals"] for i, article in enumerate(articles)}
+        logger.warning(f"LLM batch {phase if not initial_classification else 'initial classification'} failed: {e}")
+        if initial_classification:
+            return {i: {} for i, article in enumerate(articles)}
+        else:
+            return {i: article["signals"] for i, article in enumerate(articles)}
 
 
 def _safe_parse_llm_json(text: str) -> dict | None:
@@ -233,26 +321,20 @@ def _safe_parse_llm_json(text: str) -> dict | None:
 def fetch_and_label(
     country: str = "sweden",
     num_articles: int = 500,
-    method: str = "embedding",
     similarity_threshold: float = 0.20,
-    auto_calibrate: bool = True,
     fetch_body: bool = False,
-    llm_verify: bool = False,
     max_llm_calls: int = None,
     llm_max_categories: int = 2,
-    llm_batch_size: int = 15,
+    llm_batch_size: int = 100,
 ) -> pl.DataFrame:
     """
-    Fetch articles and auto-label them with optional batch LLM verification.
+    Fetch articles and classify them with LLM.
     
     Args:
         country: Country code (sweden, us, etc.)
         num_articles: Number of articles to fetch
-        method: "embedding" or "keywords"
-        similarity_threshold: Minimum similarity for embedding method
-        auto_calibrate: If True, automatically convert similarity to intensity
-        fetch_body: If True, fetch article body from URL when description is missing
-        llm_verify: If True, use LLM to verify and correct classifications (batch processing)
+        similarity_threshold: (Deprecated, kept for compatibility)
+        fetch_body: If True, fetch article body from URLs
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         llm_max_categories: Max categories to keep per article after LLM pruning
         llm_batch_size: Max articles per LLM batch call (controls context length)
@@ -261,11 +343,12 @@ def fetch_and_label(
         Labeled DataFrame
     """
     # Set default API limit
-    if llm_verify:
-        if max_llm_calls is None:
-            max_llm_calls = 50
-        if not HAS_OPENAI:
-            logger.warning("LLM verification requested but openai package not available; skipping LLM.")
+    if max_llm_calls is None:
+        max_llm_calls = 50
+    
+    if not HAS_OPENAI:
+        logger.error("LLM classification requires openai package; not available")
+        raise ImportError("openai package not installed")
     
     llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
@@ -286,23 +369,16 @@ def fetch_and_label(
     
     print(f"✓ Fetched {len(df)} articles\n")
     
-    if method == "embedding":
-        print("🤖 Auto-labeling with embedding-based classification...")
-        print(f"   (similarity threshold: {similarity_threshold})")
-        if auto_calibrate:
-            print("   (with automatic intensity calibration)")
-        if llm_verify:
-            print(f"   (LLM verification: batch processing, max {max_llm_calls} batch calls)")
-            print(f"   (LLM batch size: {llm_batch_size} articles per call)")
-    else:
-        print("🔤 Auto-labeling with keyword-based classification...")
+    print("🤖 Auto-labeling with LLM-based classification...")
+    print(f"   (LLM: gpt-4o-mini, max {max_llm_calls} batch calls)")
+    print(f"   (batch size: {llm_batch_size} articles per call, max {llm_max_categories} categories per article)")
     
-    # Phase 1: Classify all articles
-    print("\n📊 Phase 1: Embedding-based classification...")
+    # Phase 1: Fetch and prepare articles
+    print("\n📊 Phase 1: LLM-based classification...")
     all_articles = []
-    articles_needing_verification = []
+    articles_for_classification = []
     
-    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Classifying"):
+    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Preparing"):
         title = row.get("title", "")
         description = (
             row.get("description")
@@ -316,66 +392,35 @@ def fetch_and_label(
             if fetched_body:
                 description = fetched_body
         
-        signals = {}
-        if method == "embedding":
-            try:
-                signals = classify_article_embedding(
-                    title=title,
-                    description=description,
-                    similarity_threshold=similarity_threshold,
-                    relative_threshold=0.70
-                )
-                
-                if auto_calibrate:
-                    signals = calibrate_article_labels(
-                        signals=signals,
-                        title=title,
-                        description=description
-                    )
-            except Exception as e:
-                print(f"\n⚠️  Embedding failed: {e}")
-                method = "keywords"
-        
-        if method == "keywords":
-            from ml.ingestion.hopsworks_pipeline import classify_article
-            signals = classify_article(title, description, method="keywords")
-        
-        # Check if needs LLM verification
-        detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
-        needs_verification = llm_verify and (detected_count == 0 or detected_count > llm_max_categories)
-        
         article_data = {
             "row": row,
             "title": title,
             "description": description,
-            "signals": signals,
-            "detected_count": detected_count,
+            "signals": {},
         }
         
         all_articles.append(article_data)
-        
-        if needs_verification:
-            articles_needing_verification.append(article_data)
+        articles_for_classification.append(article_data)
     
-    # Phase 2: Batch LLM verification
-    if articles_needing_verification:
-        print(f"\n🤖 Phase 2: LLM batch verification ({len(articles_needing_verification)} articles)...")
-        batch_results_all = {}
-        for start in range(0, len(articles_needing_verification), llm_batch_size):
-            batch = articles_needing_verification[start:start + llm_batch_size]
-            batch_results = classify_articles_batch_with_llm(
-                articles=batch,
-                llm_call_count=llm_call_count,
-                max_llm_calls=max_llm_calls,
-                max_categories=llm_max_categories,
-                max_batch_size=llm_batch_size,
-            )
-            for idx, corrected in batch_results.items():
-                batch_results_all[start + idx] = corrected
-        
-        # Apply batch results back
-        for article_idx, corrected_signals in batch_results_all.items():
-            articles_needing_verification[article_idx]["signals"] = corrected_signals
+    # Phase 2: Batch LLM classification
+    print(f"\n🤖 Phase 2: LLM batch classification ({len(articles_for_classification)} articles)...")
+    batch_results_all = {}
+    for start in range(0, len(articles_for_classification), llm_batch_size):
+        batch = articles_for_classification[start:start + llm_batch_size]
+        batch_results = classify_articles_batch_with_llm(
+            articles=batch,
+            llm_call_count=llm_call_count,
+            max_llm_calls=max_llm_calls,
+            max_categories=llm_max_categories,
+            max_batch_size=llm_batch_size,
+            initial_classification=True,
+        )
+        for idx, classified_signals in batch_results.items():
+            batch_results_all[start + idx] = classified_signals
+    
+    # Apply batch results
+    for article_idx, classified_signals in batch_results_all.items():
+        articles_for_classification[article_idx]["signals"] = classified_signals
     
     # Phase 3: Build output
     print("\n📝 Building output...")
@@ -410,7 +455,7 @@ def fetch_and_label(
     print(f"\n✓ Labeled {len(labeled_df)} articles")
     
     # Show API usage
-    if llm_verify and llm_call_count['calls'] > 0:
+    if llm_call_count['calls'] > 0:
         estimated_cost = llm_call_count['calls'] * 0.05  # ~$0.05 per batch call
         print(f"📊 LLM API Usage: {llm_call_count['calls']} batch call(s) (estimated cost: ${estimated_cost:.2f})")
     
@@ -516,50 +561,36 @@ def split_train_val(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Label GDELT articles for BERT fine-tuning")
+    parser = argparse.ArgumentParser(description="Label GDELT articles using LLM-based classification")
     parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch (default: 500)")
     parser.add_argument("--country", type=str, default="sweden", help="Country to fetch from (default: sweden)")
-    parser.add_argument("--method", type=str, choices=["embedding", "keywords"], default="embedding", help="Labeling method (default: embedding)")
-    parser.add_argument("--threshold", type=float, default=0.20, help="Similarity threshold (default: 0.20)")
     parser.add_argument("--output", type=str, default="data", help="Output directory (default: data/)")
     parser.add_argument("--no-split", action="store_true", help="Don't split into train/val")
-    parser.add_argument("--no-calibrate", action="store_true", help="Disable automatic intensity calibration")
     parser.add_argument("--fetch-body", action="store_true", help="Fetch article body from URLs")
-    parser.add_argument("--llm-verify", action="store_true", help="Enable LLM verification (batch processing)")
     parser.add_argument("--max-llm-calls", type=int, default=50, help="Maximum LLM batch calls (default: 50)")
-    parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM pruning (default: 2)")
-    parser.add_argument("--llm-batch-size", type=int, default=15, help="Max articles per LLM call to avoid context overflow (default: 15)")
+    parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM classification (default: 2)")
+    parser.add_argument("--llm-batch-size", type=int, default=50, help="Max articles per LLM call to avoid context overflow (default: 15)")
     
     args = parser.parse_args()
     
     print("="*80)
-    print("GDELT TRAINING DATA LABELING (BATCH LLM)")
+    print("GDELT TRAINING DATA LABELING (LLM-BASED)")
     print("="*80)
-    print(f"Country:         {args.country}")
-    print(f"Articles:        {args.articles}")
-    print(f"Method:          {args.method}")
-    if args.method == "embedding":
-        print(f"Threshold:       {args.threshold}")
-        print(f"Auto-calibrate:  {not args.no_calibrate}")
-    if args.llm_verify:
-        max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
-        print(f"LLM verification: enabled (batch, max {max_calls} calls)")
-        print(f"LLM max categories: {args.llm_max_categories}")
-        print(f"LLM batch size:    {args.llm_batch_size}")
-    else:
-        print(f"LLM verification: disabled")
-    print(f"Output:          {args.output}")
+    print(f"Country:           {args.country}")
+    print(f"Articles:          {args.articles}")
+    print(f"LLM:               gpt-4o-mini (batch classification)")
+    max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
+    print(f"Max batch calls:   {max_calls}")
+    print(f"Max categories:    {args.llm_max_categories} per article")
+    print(f"Batch size:        {args.llm_batch_size} articles per call")
+    print(f"Output:            {args.output}")
     print("="*80 + "\n")
     
     # Fetch and label
     labeled_df = fetch_and_label(
         country=args.country,
         num_articles=args.articles,
-        method=args.method,
-        similarity_threshold=args.threshold,
-        auto_calibrate=not args.no_calibrate,
         fetch_body=args.fetch_body,
-        llm_verify=args.llm_verify,
         max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
         llm_max_categories=args.llm_max_categories,
         llm_batch_size=args.llm_batch_size,

@@ -6,6 +6,7 @@ Streamlined, minimal configuration, production-ready.
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 from transformers import AutoModel, AutoTokenizer
@@ -36,9 +37,12 @@ logger.info(f"Using device: {DEVICE}")
 BASE_MODEL = "KB/bert-base-swedish-cased"
 MAX_LENGTH = 512
 BATCH_SIZE = 32 if torch.cuda.is_available() else 8
-NUM_EPOCHS = 3
+NUM_EPOCHS = 10  # Increased from 3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
+SCORE_LOSS_WEIGHT = 0.6  # Favor score learning (easier) over tag learning (harder)
+TAG_LOSS_WEIGHT = 0.4
+DROPOUT_RATE = 0.2
 
 
 class QuickNewsDataset(Dataset):
@@ -99,7 +103,7 @@ class QuickNewsClassifier(nn.Module):
             cat: nn.Sequential(
                 nn.Linear(hidden_size, 128),
                 nn.ReLU(),
-                nn.Dropout(0.1),
+                nn.Dropout(DROPOUT_RATE),
                 nn.Linear(128, 1),
                 nn.Tanh()
             )
@@ -111,7 +115,7 @@ class QuickNewsClassifier(nn.Module):
             cat: nn.Sequential(
                 nn.Linear(hidden_size, 128),
                 nn.ReLU(),
-                nn.Dropout(0.1),
+                nn.Dropout(DROPOUT_RATE),
                 nn.Linear(128, len(TAG_VOCAB[cat]))
             )
             for cat in SIGNAL_CATEGORIES
@@ -153,15 +157,15 @@ def train_epoch(model, loader, optimizer, device):
         optimizer.zero_grad()
         predictions = model(input_ids, attention_mask)
 
-        # Compute loss
+        # Compute loss with weighted multi-task learning
         loss = 0.0
         for cat in SIGNAL_CATEGORIES:
             pred_score, pred_tag = predictions[cat]
             true_score = labels[cat]['score']
             true_tag = labels[cat]['tag_idx']
 
-            loss += 0.5 * mse_loss(pred_score, true_score)
-            loss += 0.5 * ce_loss(pred_tag, true_tag)
+            loss += SCORE_LOSS_WEIGHT * mse_loss(pred_score, true_score)
+            loss += TAG_LOSS_WEIGHT * ce_loss(pred_tag, true_tag)
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -201,8 +205,8 @@ def validate(model, loader, device):
                 true_score = labels[cat]['score']
                 true_tag = labels[cat]['tag_idx']
 
-                loss += 0.5 * mse_loss(pred_score, true_score)
-                loss += 0.5 * ce_loss(pred_tag, true_tag)
+                loss += SCORE_LOSS_WEIGHT * mse_loss(pred_score, true_score)
+                loss += TAG_LOSS_WEIGHT * ce_loss(pred_tag, true_tag)
 
             total_loss += loss.item()
 
@@ -234,9 +238,14 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     
+    # Learning rate scheduler
+    scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+    
     # Training
     best_val_loss = float('inf')
     history = []
+    patience = 3
+    patience_counter = 0
 
     for epoch in range(NUM_EPOCHS):
         logger.info(f"\n--- Epoch {epoch + 1}/{NUM_EPOCHS} ---")
@@ -251,10 +260,12 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
         })
 
         logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        logger.info(f"Learning Rate: {scheduler.get_last_lr()[0]:.2e}")
 
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0
             checkpoint = output_path / "best_model.pt"
             torch.save({
                 'epoch': epoch + 1,
@@ -262,6 +273,15 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
                 'val_loss': best_val_loss,
             }, checkpoint)
             logger.info(f"✓ Saved best model: {checkpoint}")
+        else:
+            patience_counter += 1
+            logger.warning(f"No improvement. Patience: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                logger.info(f"Early stopping at epoch {epoch + 1}")
+                break
+        
+        # Step scheduler
+        scheduler.step()
 
     # Save history
     with open(output_path / "history.json", 'w') as f:
