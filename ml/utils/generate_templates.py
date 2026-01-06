@@ -48,6 +48,45 @@ SIGNAL_CATEGORIES = [
 ]
 
 
+def normalize_category(raw: str) -> str:
+    """Map common variants/synonyms to canonical SIGNAL_CATEGORIES.
+    Returns canonical category or None if no match.
+    """
+    if not raw:
+        return None
+    c = raw.strip().lower().replace('-', '_')
+    # Exact match first
+    if c in SIGNAL_CATEGORIES:
+        return c
+    # Simple singular/plural and common synonyms
+    alias = {
+        "emergency": "emergencies",
+        "emergencies": "emergencies",
+        "crime": "crime",
+        "crimes": "crime",
+        "festival": "festivals",
+        "festivals": "festivals",
+        "transport": "transportation",
+        "traffic": "transportation",
+        "transportation": "transportation",
+        "weather": "weather_temp",  # generic weather -> temp bucket by default
+        "temperature": "weather_temp",
+        "heat": "weather_temp",
+        "cold": "weather_temp",
+        "rain": "weather_wet",
+        "snow": "weather_wet",
+        "wet": "weather_wet",
+        "sports": "sports",
+        "sport": "sports",
+        "economy": "economics",
+        "economics": "economics",
+        "economic": "economics",
+        "politic": "politics",
+        "politics": "politics",
+    }
+    return alias.get(c)
+
+
 class TemplateLLM:
     """Wrapper for local LLM to generate templates and keywords."""
     
@@ -143,15 +182,17 @@ Response:"""
                     article_num = int(match.group(1))
                     categories_str = match.group(2)
                     
-                    # Extract category=score pairs
-                    score_pattern = r'([a-z_]+)\s*[=:]\s*([0-9.]+)'
+                    # Extract category=score pairs (accept comma decimal too)
+                    score_pattern = r'([a-z_]+)\s*[=:]\s*([0-9.,]+)'
                     scores = {}
                     
                     for cat, score_str in re.findall(score_pattern, categories_str, re.IGNORECASE):
-                        cat_lower = cat.lower()
-                        if cat_lower in SIGNAL_CATEGORIES:
+                        cat_norm = normalize_category(cat)
+                        if cat_norm:
                             try:
-                                scores[cat_lower] = float(score_str)
+                                # Support European decimal comma
+                                score_val = float(score_str.replace(',', '.'))
+                                scores[cat_norm] = score_val
                             except ValueError:
                                 pass
                     
@@ -347,6 +388,8 @@ def generate_templates_and_keywords(
         batch = articles[i:i+batch_size]
         classifications = llm.classify_article_batch(batch)
         
+        if not classifications:
+            logger.debug("LLM classification returned no lines to parse for this batch. Sample output: %s", (response[:200] if 'response' in locals() else ''))
         for local_idx, category_scores in classifications.items():
             global_idx = i + local_idx - 1  # LLM uses 1-indexed
             if global_idx < len(articles):
@@ -354,7 +397,7 @@ def generate_templates_and_keywords(
                 
                 # Add article to each applicable category
                 for category, score in category_scores.items():
-                    if score >= 0.4:  # Confidence threshold
+                    if score >= 0.3:  # Relaxed confidence threshold
                         categorized_articles[category].append(article)
         
         # Clear CUDA cache between batches to prevent memory buildup
@@ -370,7 +413,7 @@ def generate_templates_and_keywords(
     signal_templates = {}
     
     for category in SIGNAL_CATEGORIES:
-        if category in categorized_articles and len(categorized_articles[category]) >= 5:
+        if category in categorized_articles and len(categorized_articles[category]) >= 2:
             logger.info(f"  {category}...")
             templates = llm.extract_templates(
                 categorized_articles[category],
@@ -380,7 +423,7 @@ def generate_templates_and_keywords(
             signal_templates[category] = templates
             logger.info(f"    ✓ Generated {len(templates)} templates")
         else:
-            logger.warning(f"  {category}: Not enough articles (<5), skipping")
+            logger.warning(f"  {category}: Not enough articles (<2), skipping")
             signal_templates[category] = []
     
     # Step 3: Generate keywords for each category
@@ -388,7 +431,7 @@ def generate_templates_and_keywords(
     tag_keywords = {}
     
     for category in SIGNAL_CATEGORIES:
-        if category in categorized_articles and len(categorized_articles[category]) >= 5:
+        if category in categorized_articles and len(categorized_articles[category]) >= 2:
             logger.info(f"  {category}...")
             keywords = llm.extract_keywords(
                 categorized_articles[category],
@@ -398,7 +441,7 @@ def generate_templates_and_keywords(
             tag_keywords[category] = keywords
             logger.info(f"    ✓ Generated {len(keywords)} keywords")
         else:
-            logger.warning(f"  {category}: Not enough articles (<5), skipping")
+            logger.warning(f"  {category}: Not enough articles (<2), skipping")
             tag_keywords[category] = {}
     
     # Step 4: Save to JSON files
