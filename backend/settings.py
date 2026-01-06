@@ -239,12 +239,14 @@ class Settings:
                 "ERROR: S3 storage selected but AWS credentials not configured"
             )
 
-        if self.hopsworks.enabled and (
-            not self.hopsworks.api_key or not self.hopsworks.host
-        ):
-            issues.append(
-                "WARNING: Hopsworks enabled but API key or host not configured"
-            )
+        elif self.storage.backend == 'hopsworks':
+             if (
+                not self.hopsworks.api_key
+                or not self.hopsworks.host
+            ):
+                issues.append(
+                    "ERROR: Hopsworks storage selected but API key or host not configured"
+                )
 
         if self.storage.backend == "local":
             # Ensure local storage directory exists

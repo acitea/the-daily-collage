@@ -42,7 +42,7 @@ app = FastAPI(
 # Import modules
 try:
     from backend.visualization.composition import VisualizationService
-    from backend.server.services.hopsworks import create_hopsworks_service
+    from backend.server.services.hopsworks import get_or_create_hopsworks_service
     from backend.server.services.backfill import trigger_backfill_ingestion
     from backend.settings import settings
     from backend.types import (
@@ -67,11 +67,10 @@ def init_visualization_service():
     global viz_service, hopsworks_service
     
     # Initialize HopsworksService if enabled (graceful degradation)
-    if settings.hopsworks.enabled:
+    if settings.storage.backend == 'hopsworks':
         try:
             logger.info("Initializing HopsworksService")
-            hopsworks_service = create_hopsworks_service(
-                enabled=settings.hopsworks.enabled,
+            hopsworks_service = get_or_create_hopsworks_service(
                 api_key=settings.hopsworks.api_key,
                 project_name=settings.hopsworks.project_name,
                 host=settings.hopsworks.host,
@@ -83,13 +82,10 @@ def init_visualization_service():
                 "Endpoints requiring Hopsworks will return 503."
             )
             hopsworks_service = None
-    else:
-        logger.info("HopsworksService disabled in settings")
-        hopsworks_service = None
     
     # Initialize VisualizationService
     try:
-        viz_service = VisualizationService(hopsworks_service=hopsworks_service)
+        viz_service = VisualizationService(use_hopsworks=settings.storage.backend == 'hopsworks')
         logger.info("Visualization service initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize visualization service: {str(e)}")

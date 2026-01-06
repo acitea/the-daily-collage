@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.script import fetch_news
-from backend.server.services.hopsworks import create_hopsworks_service
+from backend.server.services.hopsworks import get_or_create_hopsworks_service
 from backend.settings import settings
 
 logging.basicConfig(
@@ -305,7 +305,7 @@ def run_ingestion_pipeline(
     if store_in_hopsworks:
         logger.info("Storing data in Hopsworks...")
         
-        hopsworks_service = create_hopsworks_service(
+        hopsworks_service = get_or_create_hopsworks_service(
             enabled=settings.hopsworks.enabled,
             api_key=settings.hopsworks.api_key,
             project_name=settings.hopsworks.project_name,

@@ -215,7 +215,9 @@ class VisualizationService:
     4. Return image URL + hitboxes
     """
 
-    def __init__(self, hopsworks_service=None):
+    hopsworks_service = None 
+
+    def __init__(self, use_hopsworks=False):
         """
         Initialize service with composer and cache.
         
@@ -226,12 +228,22 @@ class VisualizationService:
 
         self.composer = HybridComposer()
 
+        if use_hopsworks:
+            logger.info("Using Hopsworks storage backend")
+            from backend.server.services.hopsworks import get_or_create_hopsworks_service
+
+            self.hopsworks_service = get_or_create_hopsworks_service(
+                api_key=settings.hopsworks.api_key,
+                project_name=settings.hopsworks.project_name,
+                host=settings.hopsworks.host,
+            )
+
         # Initialize storage backend using factory
         storage = create_storage_backend(
             backend_type=settings.storage.backend,
             bucket_name=settings.storage.bucket_name,
             local_storage_dir=settings.storage.local_storage_dir,
-            hopsworks_service=hopsworks_service,
+            hopsworks_service=self.hopsworks_service,
             artifact_collection=settings.hopsworks.artifact_collection,
         )
 

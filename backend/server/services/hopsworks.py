@@ -17,7 +17,7 @@ from hsfs.feature_store import FeatureStore
 from backend.types import SignalCategory
 
 logger = logging.getLogger(__name__)
-
+instance = None
 
 class HopsworksService:
     """
@@ -593,8 +593,7 @@ class HopsworksService:
             return []
 
 
-def create_hopsworks_service(
-    enabled: bool = True,
+def get_or_create_hopsworks_service(
     api_key: Optional[str] = None,
     project_name: Optional[str] = None,
     host: Optional[str] = None,
@@ -611,22 +610,21 @@ def create_hopsworks_service(
     Returns:
         HopsworksService instance or None if disabled/missing credentials
     """
-    if not enabled:
-        logger.info("Hopsworks integration disabled")
-        return None
-    
     if not api_key or not project_name:
         logger.warning("Hopsworks API key or project name not configured")
         return None
     
     try:
-        service = HopsworksService(
+        if instance:
+            return instance
+
+        instance = HopsworksService(
             api_key=api_key,
             project_name=project_name,
             host=host,
         )
         logger.info(f"HopsworksService created for project: {project_name}")
-        return service
+        return instance
     except Exception as e:
         logger.error(f"Failed to create HopsworksService: {e}")
         raise
