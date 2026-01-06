@@ -26,10 +26,12 @@ except Exception:  # pragma: no cover - optional runtime dep
 
 # Optional LLM dependency
 try:
-    import openai
-    HAS_OPENAI = True
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    HAS_TRANSFORMERS = True
 except ImportError:
-    HAS_OPENAI = False
+    HAS_TRANSFORMERS = False
+    torch = None
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +43,63 @@ from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
 
 logger = logging.getLogger(__name__)
+
+# Global LLM model and tokenizer (loaded once)
+_local_llm_model = None
+_local_llm_tokenizer = None
+_local_llm_device = None
+
+def get_local_llm(model_name: str = "mistralai/Mistral-7B-Instruct-v0.2"):
+    """
+    Load local LLM model for classification.
+    Uses Mistral-7B-Instruct by default (good multilingual performance).
+    Alternative: "AI-Sweden-Models/gpt-sw3-1.3b-instruct" for Swedish-specific smaller model.
+    """
+    global _local_llm_model, _local_llm_tokenizer, _local_llm_device
+    
+    if _local_llm_model is None:
+        logger.info(f"Loading local LLM: {model_name}...")
+        _local_llm_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        _local_llm_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        _local_llm_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto" if torch.cuda.is_available() else None,
+            low_cpu_mem_usage=True,
+        )
+        
+        if not torch.cuda.is_available():
+            _local_llm_model.to(_local_llm_device)
+        
+        _local_llm_model.eval()
+        logger.info(f"✓ Loaded {model_name} on {_local_llm_device}")
+    
+    return _local_llm_model, _local_llm_tokenizer, _local_llm_device
+
+
+def call_local_llm(prompt: str, max_tokens: int = 2000, temperature: float = 0.3) -> str:
+    """Call local LLM with prompt and return response."""
+    model, tokenizer, device = get_local_llm()
+    
+    # Format prompt for instruction-following models
+    formatted_prompt = f"[INST] {prompt} [/INST]"
+    
+    inputs = tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=4096)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            do_sample=True,
+            top_p=0.95,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    
+    response = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+    return response.strip()
 
 
 def classify_articles_batch_with_llm(
@@ -191,15 +250,9 @@ Return ONLY valid JSON:
   ]
 }}"""
 
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2000,
-        )
+        # Call local LLM instead of OpenAI API
+        result_text = call_local_llm(prompt, max_tokens=2000, temperature=0.3)
         
-        result_text = response.choices[0].message.content.strip()
         phase = "initial classification" if initial_classification else "verification"
         logger.info(f"LLM batch {phase} #{llm_call_count['calls']}: {len(articles)} articles")
 
@@ -321,34 +374,40 @@ def _safe_parse_llm_json(text: str) -> dict | None:
 def fetch_and_label(
     country: str = "sweden",
     num_articles: int = 500,
+    method: str = "embedding",
     similarity_threshold: float = 0.20,
+    auto_calibrate: bool = True,
     fetch_body: bool = False,
+    llm_verify: bool = False,
     max_llm_calls: int = None,
     llm_max_categories: int = 2,
-    llm_batch_size: int = 100,
+    llm_batch_size: int = 15,
 ) -> pl.DataFrame:
     """
-    Fetch articles and classify them with LLM.
+    Fetch articles and auto-label them with embedding-based classification and optional local LLM verification.
     
     Args:
         country: Country code (sweden, us, etc.)
         num_articles: Number of articles to fetch
-        similarity_threshold: (Deprecated, kept for compatibility)
-        fetch_body: If True, fetch article body from URLs
+        method: "embedding" or "keywords"
+        similarity_threshold: Minimum similarity for embedding method
+        auto_calibrate: If True, automatically convert similarity to intensity
+        fetch_body: If True, fetch article body from URL when description is missing
+        llm_verify: If True, use local LLM to verify and correct classifications (batch processing)
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         llm_max_categories: Max categories to keep per article after LLM pruning
-        llm_batch_size: Max articles per LLM batch call (controls context length)
+        llm_batch_size: Max articles per LLM call to avoid context overflow
         
     Returns:
         Labeled DataFrame
     """
     # Set default API limit
-    if max_llm_calls is None:
-        max_llm_calls = 50
-    
-    if not HAS_OPENAI:
-        logger.error("LLM classification requires openai package; not available")
-        raise ImportError("openai package not installed")
+    if llm_verify:
+        if max_llm_calls is None:
+            max_llm_calls = 50
+        if not HAS_TRANSFORMERS:
+            logger.warning("LLM verification requested but transformers not available; skipping LLM.")
+            llm_verify = False
     
     llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
@@ -369,16 +428,23 @@ def fetch_and_label(
     
     print(f"✓ Fetched {len(df)} articles\n")
     
-    print("🤖 Auto-labeling with LLM-based classification...")
-    print(f"   (LLM: gpt-4o-mini, max {max_llm_calls} batch calls)")
-    print(f"   (batch size: {llm_batch_size} articles per call, max {llm_max_categories} categories per article)")
+    if method == "embedding":
+        print("🤖 Auto-labeling with embedding-based classification...")
+        print(f"   (similarity threshold: {similarity_threshold})")
+        if auto_calibrate:
+            print("   (with automatic intensity calibration)")
+        if llm_verify:
+            print(f"   (Local LLM verification: batch processing, max {max_llm_calls} batch calls)")
+            print(f"   (LLM batch size: {llm_batch_size} articles per call)")
+    else:
+        print("🔤 Auto-labeling with keyword-based classification...")
     
-    # Phase 1: Fetch and prepare articles
-    print("\n📊 Phase 1: LLM-based classification...")
+    # Phase 1: Classify all articles with embedding/keywords
+    print("\n📊 Phase 1: Embedding-based classification...")
     all_articles = []
-    articles_for_classification = []
+    articles_needing_verification = []
     
-    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Preparing"):
+    for row in tqdm(df.iter_rows(named=True), total=len(df), desc="Classifying"):
         title = row.get("title", "")
         description = (
             row.get("description")
@@ -392,35 +458,68 @@ def fetch_and_label(
             if fetched_body:
                 description = fetched_body
         
+        signals = {}
+        if method == "embedding":
+            try:
+                signals = classify_article_embedding(
+                    title=title,
+                    description=description,
+                    similarity_threshold=similarity_threshold,
+                    relative_threshold=0.70
+                )
+                
+                if auto_calibrate:
+                    signals = calibrate_article_labels(
+                        signals=signals,
+                        title=title,
+                        description=description
+                    )
+            except Exception as e:
+                print(f"\n⚠️  Embedding failed: {e}")
+                method = "keywords"
+        
+        if method == "keywords":
+            from ml.ingestion.hopsworks_pipeline import classify_article
+            signals = classify_article(title, description, method="keywords")
+        
+        # Check if needs LLM verification
+        detected_count = sum(1 for cat, (score, tag) in signals.items() if abs(score) > 0.01)
+        # Send ALL articles with signals to LLM so it can correct/prune them
+        needs_verification = llm_verify and detected_count > 0
+        
         article_data = {
             "row": row,
             "title": title,
             "description": description,
-            "signals": {},
+            "signals": signals,
+            "detected_count": detected_count,
         }
         
         all_articles.append(article_data)
-        articles_for_classification.append(article_data)
+        
+        if needs_verification:
+            articles_needing_verification.append(article_data)
     
-    # Phase 2: Batch LLM classification
-    print(f"\n🤖 Phase 2: LLM batch classification ({len(articles_for_classification)} articles)...")
-    batch_results_all = {}
-    for start in range(0, len(articles_for_classification), llm_batch_size):
-        batch = articles_for_classification[start:start + llm_batch_size]
-        batch_results = classify_articles_batch_with_llm(
-            articles=batch,
-            llm_call_count=llm_call_count,
-            max_llm_calls=max_llm_calls,
-            max_categories=llm_max_categories,
-            max_batch_size=llm_batch_size,
-            initial_classification=True,
-        )
-        for idx, classified_signals in batch_results.items():
-            batch_results_all[start + idx] = classified_signals
-    
-    # Apply batch results
-    for article_idx, classified_signals in batch_results_all.items():
-        articles_for_classification[article_idx]["signals"] = classified_signals
+    # Phase 2: Batch LLM verification (if enabled)
+    if articles_needing_verification:
+        print(f"\n🤖 Phase 2: Local LLM batch verification ({len(articles_needing_verification)} articles)...")
+        batch_results_all = {}
+        for start in range(0, len(articles_needing_verification), llm_batch_size):
+            batch = articles_needing_verification[start:start + llm_batch_size]
+            batch_results = classify_articles_batch_with_llm(
+                articles=batch,
+                llm_call_count=llm_call_count,
+                max_llm_calls=max_llm_calls,
+                max_categories=llm_max_categories,
+                max_batch_size=llm_batch_size,
+                initial_classification=False,  # Verification mode
+            )
+            for idx, corrected in batch_results.items():
+                batch_results_all[start + idx] = corrected
+        
+        # Apply batch results back
+        for article_idx, corrected_signals in batch_results_all.items():
+            articles_needing_verification[article_idx]["signals"] = corrected_signals
     
     # Phase 3: Build output
     print("\n📝 Building output...")
@@ -454,10 +553,10 @@ def fetch_and_label(
     labeled_df = pl.DataFrame(labeled_rows)
     print(f"\n✓ Labeled {len(labeled_df)} articles")
     
-    # Show API usage
-    if llm_call_count['calls'] > 0:
-        estimated_cost = llm_call_count['calls'] * 0.05  # ~$0.05 per batch call
-        print(f"📊 LLM API Usage: {llm_call_count['calls']} batch call(s) (estimated cost: ${estimated_cost:.2f})")
+    # Show verification statistics
+    if llm_verify and llm_call_count['calls'] > 0:
+        print(f"📊 Local LLM Verification: {llm_call_count['calls']} batch call(s)")
+        print(f"   (Free! Running locally on {'GPU' if torch.cuda.is_available() else 'CPU'})")
     
     return labeled_df
 
@@ -561,36 +660,59 @@ def split_train_val(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Label GDELT articles using LLM-based classification")
+    parser = argparse.ArgumentParser(description="Label GDELT articles with embedding-based classification + optional local LLM verification")
     parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch (default: 500)")
     parser.add_argument("--country", type=str, default="sweden", help="Country to fetch from (default: sweden)")
+    parser.add_argument("--method", type=str, choices=["embedding", "keywords"], default="embedding", help="Labeling method (default: embedding)")
+    parser.add_argument("--threshold", type=float, default=0.20, help="Similarity threshold (default: 0.20)")
     parser.add_argument("--output", type=str, default="data", help="Output directory (default: data/)")
     parser.add_argument("--no-split", action="store_true", help="Don't split into train/val")
+    parser.add_argument("--no-calibrate", action="store_true", help="Disable automatic intensity calibration")
     parser.add_argument("--fetch-body", action="store_true", help="Fetch article body from URLs")
+    parser.add_argument("--llm-verify", action="store_true", help="Enable local LLM verification (batch processing)")
     parser.add_argument("--max-llm-calls", type=int, default=50, help="Maximum LLM batch calls (default: 50)")
-    parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM classification (default: 2)")
-    parser.add_argument("--llm-batch-size", type=int, default=50, help="Max articles per LLM call to avoid context overflow (default: 15)")
+    parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM pruning (default: 2)")
+    parser.add_argument("--llm-batch-size", type=int, default=15, help="Max articles per LLM call (default: 15)")
+    parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2", help="HuggingFace model for LLM verification")
     
     args = parser.parse_args()
     
     print("="*80)
-    print("GDELT TRAINING DATA LABELING (LLM-BASED)")
+    print("GDELT TRAINING DATA LABELING (EMBEDDING + OPTIONAL LOCAL LLM)")
     print("="*80)
     print(f"Country:           {args.country}")
     print(f"Articles:          {args.articles}")
-    print(f"LLM:               gpt-4o-mini (batch classification)")
-    max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
-    print(f"Max batch calls:   {max_calls}")
-    print(f"Max categories:    {args.llm_max_categories} per article")
-    print(f"Batch size:        {args.llm_batch_size} articles per call")
+    print(f"Method:            {args.method}")
+    if args.method == "embedding":
+        print(f"Threshold:         {args.threshold}")
+        print(f"Auto-calibrate:    {not args.no_calibrate}")
+    if args.llm_verify:
+        print(f"LLM verification:  enabled (model: {args.model})")
+        print(f"Device:            {'GPU (CUDA)' if torch.cuda.is_available() else 'CPU'}")
+        max_calls = args.max_llm_calls if args.max_llm_calls > 0 else "unlimited"
+        print(f"Max batch calls:   {max_calls}")
+        print(f"LLM max categories: {args.llm_max_categories}")
+        print(f"LLM batch size:    {args.llm_batch_size}")
+    else:
+        print(f"LLM verification:  disabled")
     print(f"Output:            {args.output}")
     print("="*80 + "\n")
+    
+    # Set the model globally before running if LLM verification is enabled
+    if args.llm_verify:
+        global _local_llm_model
+        if _local_llm_model is None:
+            get_local_llm(args.model)
     
     # Fetch and label
     labeled_df = fetch_and_label(
         country=args.country,
         num_articles=args.articles,
+        method=args.method,
+        similarity_threshold=args.threshold,
+        auto_calibrate=not args.no_calibrate,
         fetch_body=args.fetch_body,
+        llm_verify=args.llm_verify,
         max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
         llm_max_categories=args.llm_max_categories,
         llm_batch_size=args.llm_batch_size,
