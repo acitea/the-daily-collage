@@ -449,6 +449,8 @@ def fetch_and_label(
     similarity_threshold: float = 0.20,
     auto_calibrate: bool = True,
     fetch_body: bool = False,
+    preprocess: bool = False,
+    extract_keywords: bool = False,
     llm_verify: bool = False,
     max_llm_calls: int = None,
     llm_max_categories: int = 2,
@@ -464,6 +466,8 @@ def fetch_and_label(
         similarity_threshold: Minimum similarity for embedding method
         auto_calibrate: If True, automatically convert similarity to intensity
         fetch_body: If True, fetch article body from URL when description is missing
+        preprocess: If True, preprocess Swedish text (remove stopwords, punctuation, stem)
+        extract_keywords: If True, extract keywords using label encoder (requires preprocess=True)
         llm_verify: If True, use local LLM to verify and correct classifications (batch processing)
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         llm_max_categories: Max categories to keep per article after LLM pruning
@@ -537,7 +541,9 @@ def fetch_and_label(
                     title=title,
                     description=description,
                     similarity_threshold=similarity_threshold,
-                    relative_threshold=0.70
+                    relative_threshold=0.70,
+                    preprocess=preprocess,
+                    extract_keywords=extract_keywords
                 )
                 
                 if auto_calibrate:
@@ -756,6 +762,8 @@ def main():
     parser.add_argument("--no-split", action="store_true", help="Don't split into train/val")
     parser.add_argument("--no-calibrate", action="store_true", help="Disable automatic intensity calibration")
     parser.add_argument("--fetch-body", action="store_true", help="Fetch article body from URLs")
+    parser.add_argument("--preprocess", action="store_true", help="Preprocess Swedish text (remove stopwords, stem)")
+    parser.add_argument("--extract-keywords", action="store_true", help="Extract keywords using label encoder (requires --preprocess)")
     parser.add_argument("--llm-verify", action="store_true", help="Enable local LLM verification (batch processing)")
     parser.add_argument("--max-llm-calls", type=int, default=50, help="Maximum LLM batch calls (default: 50)")
     parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM pruning (default: 2)")
@@ -799,6 +807,8 @@ def main():
         similarity_threshold=args.threshold,
         auto_calibrate=not args.no_calibrate,
         fetch_body=args.fetch_body,
+        preprocess=args.preprocess,
+        extract_keywords=args.extract_keywords,
         llm_verify=args.llm_verify,
         max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
         llm_max_categories=args.llm_max_categories,

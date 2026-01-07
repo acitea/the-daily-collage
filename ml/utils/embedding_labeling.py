@@ -15,9 +15,33 @@ import sys
 from pathlib import Path
 from typing import Dict, Tuple, List
 import numpy as np
+import string
+import re
 
 from sentence_transformers import SentenceTransformer
 import torch
+
+# Try to import Swedish stemmer and stopwords
+try:
+    from nltk.stem.snowball import SnowballStemmer
+    from nltk.corpus import stopwords
+    import nltk
+    
+    # Download required NLTK data if not present
+    try:
+        nltk.data.find('corpora/stopwords')
+    except LookupError:
+        nltk.download('stopwords', quiet=True)
+    
+    SWEDISH_STEMMER = SnowballStemmer('swedish')
+    SWEDISH_STOPWORDS = set(stopwords.words('swedish'))
+    HAS_NLTK = True
+except ImportError:
+    HAS_NLTK = False
+    SWEDISH_STEMMER = None
+    SWEDISH_STOPWORDS = set()
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.warning("NLTK not available; Swedish text preprocessing will be basic")
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +49,89 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 logger = logging.getLogger(__name__)
+
+# Global model cache
+_model = None
+_signal_embeddings = None
+_loaded_templates = None
+_loaded_keywords = None
+
+
+def preprocess_swedish_text(text: str, remove_stopwords: bool = False, stem: bool = True) -> str:
+    """
+    Preprocess Swedish text: remove punctuation, lowercase, optionally remove stopwords and stem.
+    
+    Args:
+        text: Input text to preprocess
+        remove_stopwords: If True, remove Swedish stopwords
+        stem: If True, apply Swedish stemming
+        
+    Returns:
+        Preprocessed text as space-separated tokens
+    """
+    if not text:
+        return ""
+    
+    # Lowercase
+    text = text.lower()
+    
+    # Remove punctuation (keep only alphanumeric and spaces)
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    
+    # Remove extra whitespace and split
+    tokens = text.split()
+    
+    # Remove stopwords if requested and NLTK available
+    if remove_stopwords and HAS_NLTK:
+        tokens = [t for t in tokens if t not in SWEDISH_STOPWORDS and len(t) > 1]
+    
+    # Apply stemming if requested and NLTK available
+    if stem and HAS_NLTK:
+        tokens = [SWEDISH_STEMMER.stem(t) for t in tokens]
+    
+    return ' '.join(tokens)
+
+
+def extract_keywords_with_encoder(text: str, max_keywords: int = 50, 
+                                   ngram_range: Tuple[int, int] = (1, 2)) -> Dict[str, float]:
+    """
+    Extract keywords from preprocessed text using TF-IDF scoring.
+    
+    Args:
+        text: Preprocessed text (ideally from preprocess_swedish_text)
+        max_keywords: Maximum number of keywords to extract
+        ngram_range: Tuple of (min_n, max_n) for n-gram extraction
+        
+    Returns:
+        Dict mapping keyword to relevance score (0 to 1)
+    """
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ImportError:
+        logger.warning("scikit-learn not available; returning empty keywords")
+        return {}
+    
+    # For single document, use simple term frequency instead of TF-IDF
+    tokens = text.split()
+    if not tokens:
+        return {}
+    
+    # Count token frequencies
+    token_freq = {}
+    for token in tokens:
+        token_freq[token] = token_freq.get(token, 0) + 1
+    
+    # Normalize by total count
+    total = len(tokens)
+    keyword_scores = {
+        token: count / total 
+        for token, count in token_freq.items()
+    }
+    
+    # Sort by frequency and return top N
+    sorted_keywords = sorted(keyword_scores.items(), key=lambda x: x[1], reverse=True)
+    return dict(sorted_keywords[:max_keywords])
+
 
 # Global model cache
 _model = None
@@ -543,6 +650,8 @@ def classify_article_embedding(
     signal_embeddings: Dict[str, np.ndarray] = None,
     top_k_signals: int = None,
     relative_threshold: float = 0.70,
+    preprocess: bool = True,
+    extract_keywords: bool = False,
 ) -> Dict[str, Tuple[float, str]]:
     """
     Classify article using embedding-based semantic similarity.
@@ -560,6 +669,8 @@ def classify_article_embedding(
         top_k_signals: If set, only return top K most confident signals (default: None = all above threshold)
         relative_threshold: Only keep signals within this ratio of max similarity (default: 0.70)
             e.g., if max_sim=0.9, only keep signals with sim >= 0.9 * 0.70 = 0.63
+        preprocess: If True, preprocess Swedish text (remove stopwords, stem, remove punctuation)
+        extract_keywords: If True, extract keywords from preprocessed text (requires preprocess=True)
         
     Returns:
         Dict mapping category to (score, tag) tuple
@@ -576,6 +687,17 @@ def classify_article_embedding(
     
     if not combined_text:
         return {}
+    
+    # Preprocess if requested
+    if preprocess:
+        combined_text = preprocess_swedish_text(combined_text, remove_stopwords=True, stem=True)
+        logger.debug(f"Preprocessed text: {combined_text[:100]}...")
+    
+    # Extract keywords if requested
+    keywords_dict = {}
+    if extract_keywords and preprocess:
+        keywords_dict = extract_keywords_with_encoder(combined_text, max_keywords=30)
+        logger.debug(f"Extracted keywords: {list(keywords_dict.keys())[:10]}")
     
     # Encode the article
     article_embedding = model.encode(combined_text, convert_to_numpy=True)
