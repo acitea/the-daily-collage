@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.script import fetch_news_batched
+from ml.utils.embedding_labeling import preprocess_swedish_text
 
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -318,6 +319,113 @@ JSON:"""
         except Exception as e:
             logger.error(f"Keyword extraction failed for {category}: {e}")
             return {}
+    
+    def generate_fallback_templates(self, category: str, max_templates: int = 15) -> List[str]:
+        """
+        Generate templates for a category when no articles are available.
+        Uses LLM to create representative Swedish news phrases.
+        
+        Args:
+            category: Signal category name
+            max_templates: Number of templates to generate
+            
+        Returns:
+            List of template strings
+        """
+        prompt = f"""Generate {max_templates} representative Swedish news headlines/phrases about "{category}".
+These should be realistic and varied examples that appear in Swedish news.
+Output only the numbered list, one phrase per line.
+
+Example format for "crime":
+1. Rån på bensinstation - två män gripna
+2. Misstänkt mord under utredning
+3. Polisen ökar patrulleringen i området
+etc.
+
+Swedish {category} headlines:
+"""
+        
+        try:
+            response = self.call(prompt, max_tokens=600, temperature=0.7)
+            
+            # Parse numbered list
+            templates = []
+            for line in response.split('\n'):
+                line = line.strip()
+                if line and (line[0].isdigit() or line.startswith('-')):
+                    # Remove numbering
+                    phrase = line.split('.', 1)[-1].split(')', 1)[-1].strip()
+                    if phrase and len(phrase) > 5:
+                        templates.append(phrase)
+            
+            logger.info(f"  Generated {len(templates)} fallback templates for {category}")
+            return templates[:max_templates]
+        except Exception as e:
+            logger.error(f"Fallback template generation failed for {category}: {e}")
+            return []
+    
+    def generate_fallback_keywords(self, category: str, max_keywords: int = 20) -> Dict[str, str]:
+        """
+        Generate keywords for a category when no articles are available.
+        Uses LLM to create representative Swedish keywords.
+        
+        Args:
+            category: Signal category name
+            max_keywords: Number of keywords to generate
+            
+        Returns:
+            Dict mapping keyword to tag
+        """
+        prompt = f"""Generate {max_keywords} common Swedish keywords related to "{category}" news.
+For each keyword, assign a SHORT tag (1-2 words) that categorizes it within the topic.
+
+Respond in JSON format ONLY:
+{{
+  "keyword1": "tag1",
+  "keyword2": "tag2",
+  ...
+}}
+
+Example for "emergencies": {{"brand": "fire", "explosion": "blast", "jordbävning": "earthquake"}}
+
+For "{category}", generate relevant Swedish keywords:
+JSON:"""
+        
+        try:
+            response = self.call(prompt, max_tokens=500, temperature=0.5)
+            
+            # Extract JSON
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            if json_start != -1 and json_end > json_start:
+                json_str = response[json_start:json_end]
+                
+                # Clean common JSON issues
+                json_str = re.sub(r'(?<!\\)\\(?!["\\/$bfnrtu])', r'\\\\', json_str)
+                json_str = re.sub(r'[\x00-\x1f\x7f]', '', json_str)
+                json_str = re.sub(r"'", '"', json_str)
+                json_str = re.sub(r'"\s+"', '", "', json_str)
+                
+                try:
+                    keywords = json.loads(json_str)
+                except json.JSONDecodeError:
+                    pattern = r'"?([^":]+)"?\s*:\s*"?([^",}]+)"?'
+                    matches = re.findall(pattern, json_str)
+                    keywords = dict(matches)
+                
+                # Filter valid entries
+                valid_keywords = {}
+                for k, v in keywords.items():
+                    if isinstance(k, str) and isinstance(v, str) and len(k) > 2 and len(v) > 0:
+                        valid_keywords[k.lower().strip()] = v.lower().strip()
+                
+                logger.info(f"  Generated {len(valid_keywords)} fallback keywords for {category}")
+                return valid_keywords
+            else:
+                return {}
+        except Exception as e:
+            logger.error(f"Fallback keyword generation failed for {category}: {e}")
+            return {}
 
 
 def generate_templates_and_keywords(
@@ -334,7 +442,7 @@ def generate_templates_and_keywords(
     Args:
         num_articles: Number of GDELT articles to fetch
         country: Country filter for GDELT
-        llm_model_name: HuggingFace model name
+        llm_model_name: OpenAI model name
         templates_per_category: Number of template phrases per category
         keywords_per_category: Number of keywords per category
         output_dir: Directory to save JSON files
@@ -357,18 +465,36 @@ def generate_templates_and_keywords(
     articles = articles_df.to_dicts()
     logger.info(f"✓ Fetched {len(articles)} articles")
     
+    # Preprocess articles (remove stopwords, punctuation, stem)
+    logger.info("Preprocessing articles (removing stopwords, punctuation, stemming)...")
+    for article in articles:
+        title = article.get('title', '')
+        desc = article.get('description', '')
+        combined = f"{title} {desc}"
+        # Store preprocessed text for LLM classification
+        article['preprocessed'] = preprocess_swedish_text(combined, remove_stopwords=True, stem=True)
+    logger.info("✓ Preprocessing complete")
+    
     # Initialize LLM
     llm = TemplateLLM(model_name=llm_model_name)
     
-    # Step 1: Classify all articles
+    # Step 1: Classify all articles using preprocessed text
     logger.info("Classifying articles into categories...")
     categorized_articles = defaultdict(list)
     
     # Process in batches - OpenAI handles this efficiently
-    batch_size = 20  # Can be larger with OpenAI
+    batch_size = 20
     for i in tqdm(range(0, len(articles), batch_size), desc="Classifying"):
         batch = articles[i:i+batch_size]
-        classifications = llm.classify_article_batch(batch)
+        # Create batch with preprocessed text for better classification
+        batch_for_llm = []
+        for article in batch:
+            batch_for_llm.append({
+                'title': article['preprocessed'][:100],  # Use preprocessed text as title
+                'description': article['preprocessed'][100:]  # Rest as description
+            })
+        
+        classifications = llm.classify_article_batch(batch_for_llm)
         
         for local_idx, category_scores in classifications.items():
             global_idx = i + local_idx - 1  # LLM uses 1-indexed
@@ -389,36 +515,69 @@ def generate_templates_and_keywords(
     signal_templates = {}
     
     for category in SIGNAL_CATEGORIES:
+        all_templates = []
+        
+        # First: Extract templates from articles if available
         if category in categorized_articles and len(categorized_articles[category]) >= 2:
-            logger.info(f"  {category}...")
-            templates = llm.extract_templates(
+            logger.info(f"  {category}: extracting from articles...")
+            article_templates = llm.extract_templates(
                 categorized_articles[category],
                 category,
                 max_templates=templates_per_category
             )
-            signal_templates[category] = templates
-            logger.info(f"    ✓ Generated {len(templates)} templates")
-        else:
-            logger.warning(f"  {category}: Not enough articles (<2), skipping")
-            signal_templates[category] = []
+            all_templates.extend(article_templates)
+            logger.info(f"    ✓ Extracted {len(article_templates)} templates from articles")
+        
+        # Second: Always generate generic templates for this category (minimum 20)
+        logger.info(f"  {category}: generating generic templates...")
+        generic_templates = llm.generate_fallback_templates(
+            category,
+            max_templates=20  # Always generate at least 20 generic templates
+        )
+        all_templates.extend(generic_templates)
+        logger.info(f"    ✓ Generated {len(generic_templates)} generic templates")
+        
+        # Deduplicate while preserving order (case-insensitive)
+        seen = set()
+        unique_templates = []
+        for template in all_templates:
+            template_lower = template.lower()
+            if template_lower not in seen:
+                seen.add(template_lower)
+                unique_templates.append(template)
+        
+        signal_templates[category] = unique_templates
+        logger.info(f"    → Total (after dedup): {len(unique_templates)} templates")
     
     # Step 3: Generate keywords for each category
     logger.info("\nGenerating tag keywords...")
     tag_keywords = {}
     
     for category in SIGNAL_CATEGORIES:
+        all_keywords = {}
+        
+        # First: Extract keywords from articles if available
         if category in categorized_articles and len(categorized_articles[category]) >= 2:
-            logger.info(f"  {category}...")
-            keywords = llm.extract_keywords(
+            logger.info(f"  {category}: extracting from articles...")
+            article_keywords = llm.extract_keywords(
                 categorized_articles[category],
                 category,
                 max_keywords=keywords_per_category
             )
-            tag_keywords[category] = keywords
-            logger.info(f"    ✓ Generated {len(keywords)} keywords")
-        else:
-            logger.warning(f"  {category}: Not enough articles (<2), skipping")
-            tag_keywords[category] = {}
+            all_keywords.update(article_keywords)
+            logger.info(f"    ✓ Extracted {len(article_keywords)} keywords from articles")
+        
+        # Second: Always generate generic keywords for this category (minimum 20)
+        logger.info(f"  {category}: generating generic keywords...")
+        generic_keywords = llm.generate_fallback_keywords(
+            category,
+            max_keywords=20  # Always generate at least 20 generic keywords
+        )
+        all_keywords.update(generic_keywords)
+        logger.info(f"    ✓ Generated {len(generic_keywords)} generic keywords")
+        
+        tag_keywords[category] = all_keywords
+        logger.info(f"    → Total (after dedup): {len(all_keywords)} keywords")
     
     # Step 4: Save to JSON files
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -441,6 +600,17 @@ def generate_templates_and_keywords(
     logger.info(f"Articles processed: {len(articles)}")
     logger.info(f"Templates generated: {sum(len(t) for t in signal_templates.values())}")
     logger.info(f"Keywords generated: {sum(len(k) for k in tag_keywords.values())}")
+    
+    logger.info("\nTemplate breakdown per category:")
+    for category in SIGNAL_CATEGORIES:
+        count = len(signal_templates.get(category, []))
+        logger.info(f"  {category:20s}: {count:3d} templates")
+    
+    logger.info("\nKeyword breakdown per category:")
+    for category in SIGNAL_CATEGORIES:
+        count = len(tag_keywords.get(category, {}))
+        logger.info(f"  {category:20s}: {count:3d} keywords")
+    
     logger.info("\nNext steps:")
     logger.info("  1. Review the generated JSON files")
     logger.info("  2. Run embedding classification with new templates:")
