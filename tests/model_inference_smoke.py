@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Comprehensive smoke test for the LLM-based Swedish news classifier.
-Tests all 9 signal categories with multiple examples per category.
+Tests all 9 signal categories with real GDELT articles fetched per category.
 Automatically validates that:
-  1. The category with highest score is correctly identified
-  2. The tag is not null (properly labeled)
+  1. The category with highest confidence matches the expected category
+  2. The tag is properly labeled
 
-NOTE: Requires OPENAI_API_KEY environment variable to be set.
+NOTE: Requires OPENAI_API_KEY environment variable to be set for LLM adjudication.
 """
 
 from pathlib import Path
@@ -14,6 +14,7 @@ import sys
 import os
 import json
 from typing import Dict, Tuple, Optional, List
+import time
 
 # Optional LLM dependency for adjudication
 try:
@@ -26,120 +27,88 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.models.inference import get_fine_tuned_classifier
-from ml.ingestion.script import fetch_news
+from gdeltdoc import GdeltDoc, Filters
+from ml.ingestion.script import normalize_country_input
 
-
-# Test cases: (title, description, expected_category)
-TEST_CASES = {
-    "emergencies": [
-        (
-            "Brand i Stockholm",
-            "Stor brand på Kungsholmen i Stockholm",
-            "Räddningstjänsten bekräftar kraftig rökutveckling och evakueringar",
-        ),
-        (
-            "Jordskalv i Jämtland",
-            "Jordskalv med magnitud 4.2 orsakar skador",
-            "Flera hus har spruckit och människor evakueras från området",
-        ),
-    ],
-    "crime": [
-        (
-            "Rån på bensinstation",
-            "Beväpnat rån på OKQ8 i Västerås",
-            "Polisen söker två män som flydde med okänd summa pengar",
-        ),
-        (
-            "Inbrott i villa",
-            "Inbrott i ett bostadshus i Nacka",
-            "Tjuvar stal elektronik och smycken för flera hundra tusen kronor",
-        ),
-    ],
-    "festivals": [
-        (
-            "Summerburst musikfestival",
-            "Summerburst startar denna helg med internationella artister",
-            "Över 50,000 besökare förväntas till festivalen på Gärdet",
-        ),
-        (
-            "Stockholm Pride parade",
-            "Pride-paraden marscherar genom Stockholm",
-            "Tusentals människor samlas för att fira mångfald och inkludering",
-        ),
-    ],
-    "transportation": [
-        (
-            "Trafikstörning på E4",
-            "Tung lastbil orsakar köer på E4 norr om Uppsala",
-            "Trafikverket rapporterar långsamma köer och inställda bussar",
-        ),
-        (
-            "Tågtrafik försenad",
-            "Signalfel orsakar förseningar på flera tåglinjer",
-            "Pendlare uppmanas att planera längre restid",
-        ),
-    ],
-    "weather_temp": [
-        (
-            "Värmebölja i Sverige",
-            "Temperaturerna stiger till över 30 grader",
-            "SMHI varnar för extrem värme i hela landet",
-        ),
-        (
-            "Kall vinter i norra Sverige",
-            "Temperaturer sjunker till minus 35 grader i Kiruna",
-            "Invånare varnas att stanna inomhus",
-        ),
-    ],
-    "weather_wet": [
-        (
-            "Kraftigt regn och översvämning",
-            "SMHI varnar för skyfall i Göteborg",
-            "SMHI varnar för översvämningar och störningar i trafiken",
-        ),
-        (
-            "Snöstorm i fjällen",
-            "Kraftig snöfall orsakar lavinvarning",
-            "Vägar stängs och evakueringar genomförs i området",
-        ),
-    ],
-    "sports": [
-        (
-            "Fotbollsmatch Sverige-Norge",
-            "Sverige spelar hemmakvinnor mot Norge i VM-kval",
-            "Omkring 35,000 fans väntas fylla Stockholms Stadion",
-        ),
-        (
-            "Djurgårdens SM-titel",
-            "Djurgården vinner SM-guld i ishockey",
-            "Jubilande fans fyller gatorna i Stockholm efter segern",
-        ),
-    ],
-    "economics": [
-        (
-            "Riksbanken höjer räntan",
-            "Riksbanken höjer räntan med 0.5 procent",
-            "Hypotekslån och lån för konsumenter blir dyrare",
-        ),
-        (
-            "Arbetslöshet sjunker",
-            "Arbetslösheten faller till 6.5 procent",
-            "Arbetsmarknaden visar stark utveckling",
-        ),
-    ],
-    "politics": [
-        (
-            "Regeringen presenterar ny klimatpolitik",
-            "Statsminister presenterar ambitiös klimatplan",
-            "Oppositionen kräver mer drastiska åtgärder",
-        ),
-        (
-            "Partiledardebatt inför valet",
-            "Ledarna från alla riksdagspartier debatterar",
-            "Välfärd och skatter är huvudsakliga teman",
-        ),
-    ],
+# Category-specific keywords for GDELT queries (Swedish)
+CATEGORY_KEYWORDS = {
+    "emergencies": ["brand", "explosion", "räddning", "olycka", "katastrof", "evakuering", "larm", "nödläge"],
+    "crime": ["brott", "polis", "misstänkt", "åtal", "rån", "mord", "skottlossning", "gripna"],
+    "festivals": ["festival", "konsert", "evenemang", "firande", "kulturvecka", "musikfestival", "teater"],
+    "transportation": ["trafik", "kollektivtrafik", "tåg", "buss", "förseningar", "inställt", "väg", "trafikstörning"],
+    "weather_temp": ["temperatur", "värmebölja", "kyla", "vädret", "SMHI", "vädervarning", "grader"],
+    "weather_wet": ["regn", "snö", "översvämning", "storm", "blåst", "skyfall", "halka"],
+    "sports": ["sport", "fotboll", "ishockey", "seger", "matcher", "VM", "EM", "allsvenskan"],
+    "economics": ["ekonomi", "börs", "aktier", "inflation", "ränta", "finans", "arbetsmarknad", "löner"],
+    "politics": ["regering", "riksdag", "politik", "val", "minister", "parti", "opposition", "lagförslag"]
 }
+
+
+def fetch_articles_for_category(
+    category: str,
+    country: str = "sweden",
+    num_articles: int = 3,
+    days_lookback: int = 180,
+) -> List[Dict]:
+    """
+    Fetch GDELT articles specifically for one category using keyword filtering.
+    
+    Args:
+        category: Signal category name
+        country: Country code
+        num_articles: Target number of articles to fetch
+        days_lookback: How many days to search back
+        
+    Returns:
+        List of article dicts
+    """
+    import polars as pl
+    
+    fips_code = normalize_country_input(country)
+    keywords = CATEGORY_KEYWORDS.get(category, [])
+    
+    if not keywords:
+        print(f"      ⚠️  No keywords defined for category: {category}")
+        return []
+    
+    all_articles = []
+    seen_urls = set()
+    
+    # Try first 2 keywords to get variety
+    for keyword in keywords[:2]:
+        try:
+            gd = GdeltDoc()
+            filters = Filters(
+                country=fips_code,
+                keyword=keyword,
+                num_records=min(50, num_articles * 2),
+                timespan=f"{days_lookback}d",
+            )
+            
+            articles_pd = gd.article_search(filters)
+            
+            if articles_pd is not None and not articles_pd.empty:
+                articles_pl = pl.from_pandas(articles_pd)
+                
+                # Deduplicate by URL
+                for article in articles_pl.iter_rows(named=True):
+                    url = article.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_articles.append(article)
+                
+                # Stop if we have enough
+                if len(all_articles) >= num_articles:
+                    break
+            
+            # Small delay between keyword queries
+            time.sleep(0.3)
+                
+        except Exception as e:
+            print(f"      ⚠️  Failed to fetch articles for keyword '{keyword}': {e}")
+            continue
+    
+    return all_articles[:num_articles]
 
 
 def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple[bool, Optional[str]]:
@@ -149,8 +118,8 @@ def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple
     Returns:
         (passed: bool, error_msg: Optional[str])
     """
-    # Use confidence-based classification (exclude sports if needed)
-    top_result = model.get_top_category(text, desc, exclude_categories=['sports'])
+    # Use confidence-based classification
+    top_result = model.get_top_category(text, desc)
     
     if not top_result:
         return False, "No predictions above threshold"
