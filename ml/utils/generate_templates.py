@@ -2,21 +2,25 @@
 Generate SIGNAL_TEMPLATES and TAG_KEYWORDS from real GDELT data using LLM.
 
 This script:
-1. Fetches a large batch of GDELT articles (titles + descriptions)
-2. Uses local LLM to classify articles into signal categories
-3. Extracts representative example phrases as SIGNAL_TEMPLATES
+1. Fetches GDELT articles per category using category-specific keywords
+2. Preprocesses articles (Swedish text normalization)
+3. Extracts representative example phrases as SIGNAL_TEMPLATES from category-specific articles
 4. Extracts observed keywords/tags from titles and descriptions as TAG_KEYWORDS
-5. Saves both to JSON files for use by embedding-based classification
+5. Generates generic templates/keywords using LLM to ensure comprehensive coverage
+6. Saves both to JSON files for use by embedding-based classification
 
 Usage:
-    # Generate templates from 500 Swedish articles
-    python ml/utils/generate_templates.py --articles 500 --country sweden
+    # Generate templates from 100 Swedish articles per category (900 total)
+    python ml/utils/generate_templates.py --articles-per-category 100 --country sweden
     
-    # Use specific LLM model
-    python ml/utils/generate_templates.py --articles 300 --model AI-Sweden-Models/gpt-sw3-1.3b-instruct
+    # Search further back in time (up to 360 days)
+    python ml/utils/generate_templates.py --articles-per-category 150 --days-lookback 180
+    
+    # Use GPT-4 for better quality
+    python ml/utils/generate_templates.py --articles-per-category 100 --model gpt-4
     
     # Generate more templates per category (default 30)
-    python ml/utils/generate_templates.py --articles 1000 --templates-per-category 50
+    python ml/utils/generate_templates.py --articles-per-category 100 --templates-per-category 50
 """
 
 import argparse
@@ -36,8 +40,9 @@ import re
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml.ingestion.script import fetch_news_batched
+from ml.ingestion.script import normalize_country_input
 from ml.utils.embedding_labeling import preprocess_swedish_text
+from gdeltdoc import GdeltDoc, Filters
 
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,6 +52,19 @@ SIGNAL_CATEGORIES = [
     "emergencies", "crime", "festivals", "transportation",
     "weather_temp", "weather_wet", "sports", "economics", "politics"
 ]
+
+# Category-specific keywords for GDELT queries (Swedish)
+CATEGORY_KEYWORDS = {
+    "emergencies": ["brand", "explosion", "räddning", "olycka", "katastrof", "evakuering", "larm", "nödläge"],
+    "crime": ["brott", "polis", "misstänkt", "åtal", "rån", "mord", "skottlossning", "gripna"],
+    "festivals": ["festival", "konsert", "evenemang", "firande", "kulturvecka", "musikfestival", "teater"],
+    "transportation": ["trafik", "kollektivtrafik", "tåg", "buss", "förseningar", "inställt", "väg", "trafikstörning"],
+    "weather_temp": ["temperatur", "värmebölja", "kyla", "vädret", "SMHI", "vädervarning", "grader"],
+    "weather_wet": ["regn", "snö", "översvämning", "storm", "blåst", "skyfall", "halka"],
+    "sports": ["sport", "fotboll", "ishockey", "seger", "matcher", "VM", "EM", "allsvenskan"],
+    "economics": ["ekonomi", "börs", "aktier", "inflation", "ränta", "finans", "arbetsmarknad", "löner"],
+    "politics": ["regering", "riksdag", "politik", "val", "minister", "parti", "opposition", "lagförslag"]
+}
 
 
 def normalize_category(raw: str) -> str:
@@ -428,85 +446,137 @@ JSON:"""
             return {}
 
 
+def fetch_articles_for_category(
+    category: str,
+    country: str,
+    num_articles: int = 100,
+    days_lookback: int = 360,
+) -> list:
+    """
+    Fetch GDELT articles specifically for one category using keyword filtering.
+    
+    Args:
+        category: Signal category name
+        country: Country code
+        num_articles: Target number of articles to fetch
+        days_lookback: How many days to search back (max 360)
+        
+    Returns:
+        List of article dicts
+    """
+    from gdeltdoc import GdeltDoc, Filters
+    import polars as pl
+    import time
+    
+    fips_code = normalize_country_input(country)
+    keywords = CATEGORY_KEYWORDS.get(category, [])
+    
+    if not keywords:
+        logger.warning(f"No keywords defined for category: {category}")
+        return []
+    
+    logger.info(f"Fetching articles for {category} with keywords: {keywords[:3]}...")
+    
+    all_articles = []
+    seen_urls = set()
+    
+    # Split into multiple batches with different keywords to get variety
+    articles_per_keyword = max(50, num_articles // len(keywords))
+    
+    for keyword in keywords[:4]:  # Use top 4 keywords to avoid too many API calls
+        try:
+            gd = GdeltDoc()
+            filters = Filters(
+                country=fips_code,
+                keyword=keyword,
+                num_records=min(250, articles_per_keyword),
+                timespan=f"{days_lookback}d",
+            )
+            
+            articles_pd = gd.article_search(filters)
+            
+            if articles_pd is not None and not articles_pd.empty:
+                articles_pl = pl.from_pandas(articles_pd)
+                
+                # Deduplicate by URL
+                for article in articles_pl.iter_rows(named=True):
+                    url = article.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_articles.append(article)
+                
+                logger.debug(f"  Keyword '{keyword}': {len(articles_pl)} articles, unique: {len(all_articles)}")
+            
+            # Small delay between keyword queries
+            time.sleep(0.3)
+            
+            # Stop if we have enough
+            if len(all_articles) >= num_articles:
+                break
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch articles for keyword '{keyword}': {e}")
+            continue
+    
+    logger.info(f"  → Fetched {len(all_articles)} unique articles for {category}")
+    return all_articles
+
+
 def generate_templates_and_keywords(
-    num_articles: int,
+    articles_per_category: int,
     country: str,
     llm_model_name: str,
     templates_per_category: int,
     keywords_per_category: int,
     output_dir: Path,
+    days_lookback: int = 360,
 ):
     """
-    Main pipeline to generate templates and keywords.
+    Main pipeline to generate templates and keywords by fetching articles per category.
     
     Args:
-        num_articles: Number of GDELT articles to fetch
+        articles_per_category: Number of articles to fetch per category
         country: Country filter for GDELT
         llm_model_name: OpenAI model name
         templates_per_category: Number of template phrases per category
         keywords_per_category: Number of keywords per category
         output_dir: Directory to save JSON files
+        days_lookback: How many days to search back (max 360)
     """
-    logger.info(f"Fetching {num_articles} articles from GDELT (country={country})...")
-    
-    # Fetch articles
-    articles_df = fetch_news_batched(
-        country=country,
-        total_articles=num_articles,
-        batch_size=min(250, num_articles),
-        days_lookback=7,  # Last week for variety
-    )
-    
-    if articles_df is None or len(articles_df) == 0:
-        logger.error("No articles fetched. Exiting.")
-        return
-    
-    # Convert to list of dicts
-    articles = articles_df.to_dicts()
-    logger.info(f"✓ Fetched {len(articles)} articles")
-    
-    # Preprocess articles (remove stopwords, punctuation, stem)
-    logger.info("Preprocessing articles (removing stopwords, punctuation, stemming)...")
-    for article in articles:
-        title = article.get('title', '')
-        desc = article.get('description', '')
-        combined = f"{title} {desc}"
-        # Store preprocessed text for LLM classification
-        article['preprocessed'] = preprocess_swedish_text(combined, remove_stopwords=True, stem=True)
-    logger.info("✓ Preprocessing complete")
-    
     # Initialize LLM
     llm = TemplateLLM(model_name=llm_model_name)
     
-    # Step 1: Classify all articles using preprocessed text
-    logger.info("Classifying articles into categories...")
-    categorized_articles = defaultdict(list)
+    # Step 1: Fetch articles per category
+    logger.info(f"Fetching {articles_per_category} articles per category from GDELT (country={country}, lookback={days_lookback} days)...")
+    categorized_articles = {}
     
-    # Process in batches - OpenAI handles this efficiently
-    batch_size = 20
-    for i in tqdm(range(0, len(articles), batch_size), desc="Classifying"):
-        batch = articles[i:i+batch_size]
-        # Create batch with preprocessed text for better classification
-        batch_for_llm = []
-        for article in batch:
-            batch_for_llm.append({
-                'title': article['preprocessed'][:100],  # Use preprocessed text as title
-                'description': article['preprocessed'][100:]  # Rest as description
-            })
+    for category in SIGNAL_CATEGORIES:
+        logger.info(f"\n📰 Category: {category}")
+        articles = fetch_articles_for_category(
+            category=category,
+            country=country,
+            num_articles=articles_per_category,
+            days_lookback=days_lookback,
+        )
         
-        classifications = llm.classify_article_batch(batch_for_llm)
-        
-        for local_idx, category_scores in classifications.items():
-            global_idx = i + local_idx - 1  # LLM uses 1-indexed
-            if global_idx < len(articles):
-                article = articles[global_idx]
-                
-                # Add article to each applicable category
-                for category, score in category_scores.items():
-                    if score >= 0.3:  # Relaxed confidence threshold
-                        categorized_articles[category].append(article)
+        if articles:
+            # Preprocess articles (remove stopwords, punctuation, stem)
+            logger.info(f"  Preprocessing {len(articles)} articles...")
+            for article in articles:
+                title = article.get('title', '')
+                desc = article.get('description', '')
+                combined = f"{title} {desc}"
+                # Store preprocessed text
+                article['preprocessed'] = preprocess_swedish_text(combined, remove_stopwords=True, stem=True)
+            
+            categorized_articles[category] = articles
+            logger.info(f"  ✓ {len(articles)} articles ready for {category}")
+        else:
+            logger.warning(f"  ⚠️  No articles found for {category}")
+            categorized_articles[category] = []
     
-    logger.info("✓ Classification complete")
+    logger.info(f"\n✓ Article fetching complete")
+    logger.info("Category distribution:")
     for cat, arts in categorized_articles.items():
         logger.info(f"  {cat:20s}: {len(arts):3d} articles")
     
@@ -597,7 +667,9 @@ def generate_templates_and_keywords(
     logger.info("\n" + "="*60)
     logger.info("SUMMARY")
     logger.info("="*60)
-    logger.info(f"Articles processed: {len(articles)}")
+    logger.info(f"Articles fetched per category: {articles_per_category} (target)")
+    logger.info(f"Days searched: {days_lookback}")
+    logger.info(f"Total articles collected: {sum(len(arts) for arts in categorized_articles.values())}")
     logger.info(f"Templates generated: {sum(len(t) for t in signal_templates.values())}")
     logger.info(f"Keywords generated: {sum(len(k) for k in tag_keywords.values())}")
     
@@ -618,8 +690,9 @@ def generate_templates_and_keywords(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate signal templates and keywords from GDELT")
-    parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch")
+    parser = argparse.ArgumentParser(description="Generate signal templates and keywords from GDELT per category")
+    parser.add_argument("--articles-per-category", type=int, default=100, 
+                        help="Number of articles to fetch per category (default: 100)")
     parser.add_argument("--country", type=str, default="sweden", help="Country filter")
     parser.add_argument("--model", type=str, default="gpt-3.5-turbo", 
                         help="OpenAI model name (default: gpt-3.5-turbo, or use gpt-4 for better quality)")
@@ -627,18 +700,21 @@ def main():
                         help="Number of template phrases per category")
     parser.add_argument("--keywords-per-category", type=int, default=25, 
                         help="Number of keywords per category")
+    parser.add_argument("--days-lookback", type=int, default=360,
+                        help="How many days to search back (max 360)")
     parser.add_argument("--output-dir", type=Path, default=Path("data"), 
                         help="Output directory for JSON files")
     
     args = parser.parse_args()
     
     generate_templates_and_keywords(
-        num_articles=args.articles,
+        articles_per_category=args.articles_per_category,
         country=args.country,
         llm_model_name=args.model,
         templates_per_category=args.templates_per_category,
         keywords_per_category=args.keywords_per_category,
         output_dir=args.output_dir,
+        days_lookback=args.days_lookback,
     )
 
 
