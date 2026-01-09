@@ -1,6 +1,7 @@
 """
 Quick fine-tuning script for one-day MVP.
 Streamlined, minimal configuration, production-ready.
+Supports stratified k-fold cross-validation.
 """
 
 import torch
@@ -16,6 +17,7 @@ from tqdm import tqdm
 import sys
 import json
 from datetime import datetime
+from sklearn.model_selection import StratifiedKFold
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -37,11 +39,11 @@ logger.info(f"Using device: {DEVICE}")
 BASE_MODEL = "KB/bert-base-swedish-cased"
 MAX_LENGTH = 512
 BATCH_SIZE = 32 if torch.cuda.is_available() else 8
-NUM_EPOCHS = 10  # Increased from 3
+NUM_EPOCHS = 10
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
-SCORE_LOSS_WEIGHT = 0.6  # Favor score learning (easier) over tag learning (harder)
-TAG_LOSS_WEIGHT = 0.4
+SCORE_LOSS_WEIGHT = 0.4
+TAG_LOSS_WEIGHT = 0.6
 DROPOUT_RATE = 0.2
 
 
@@ -293,16 +295,183 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
     return model
 
 
+def train_with_stratified_kfold(data_path: str, k: int = 5, output_dir: str = "ml/models/checkpoints"):
+    """
+    Train model using stratified k-fold cross-validation.
+    
+    Args:
+        data_path: Path to labeled dataset parquet file
+        k: Number of folds (default: 5)
+        output_dir: Output directory for checkpoints and results
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Loading data for stratified {k}-fold cross-validation...")
+    df = pl.read_parquet(data_path)
+    
+    # Create stratification key based on primary signal
+    def get_primary_signal(signals: dict) -> str:
+        """Get primary signal category for stratification."""
+        if not signals:
+            return "none"
+        max_cat = max(
+            ((cat, (score, tag)) for cat, (score, tag) in signals.items() if abs(score) > 0.01),
+            key=lambda x: abs(x[1][0]),
+            default=("none", (0.0, ""))
+        )
+        return max_cat[0]
+    
+    df = df.with_columns(
+        pl.col("signals").map_elements(get_primary_signal, return_dtype=pl.Utf8).alias("_strat_key")
+    )
+    
+    # Convert to numpy for sklearn
+    X = df.drop("_strat_key").to_numpy()
+    y = df["_strat_key"].to_numpy()
+    
+    # Setup stratified k-fold
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+    
+    fold_results = []
+    fold_models = []
+    
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"FOLD {fold_idx + 1}/{k}")
+        logger.info(f"{'='*60}")
+        logger.info(f"Train size: {len(train_idx)}, Val size: {len(val_idx)}")
+        
+        # Create fold-specific datasets
+        train_df = df[train_idx].drop("_strat_key")
+        val_df = df[val_idx].drop("_strat_key")
+        
+        # Save fold data temporarily
+        fold_train_path = output_path / f"fold_{fold_idx}_train.parquet"
+        fold_val_path = output_path / f"fold_{fold_idx}_val.parquet"
+        
+        train_df.write_parquet(fold_train_path)
+        val_df.write_parquet(fold_val_path)
+        
+        # Train on this fold
+        logger.info(f"Training fold {fold_idx + 1}...")
+        tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+        
+        train_dataset = QuickNewsDataset(str(fold_train_path), tokenizer)
+        val_dataset = QuickNewsDataset(str(fold_val_path), tokenizer)
+        
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
+        
+        # Create and train model
+        model = QuickNewsClassifier(BASE_MODEL)
+        model.to(DEVICE)
+        
+        optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+        scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+        
+        best_val_loss = float('inf')
+        fold_history = []
+        patience_counter = 0
+        patience = 3
+        
+        for epoch in range(NUM_EPOCHS):
+            train_loss = train_epoch(model, train_loader, optimizer, DEVICE)
+            val_loss = validate(model, val_loader, DEVICE)
+            
+            fold_history.append({
+                'epoch': epoch + 1,
+                'train_loss': float(train_loss),
+                'val_loss': float(val_loss),
+            })
+            
+            logger.info(f"  Epoch {epoch + 1}/{NUM_EPOCHS} - Train: {train_loss:.4f}, Val: {val_loss:.4f}")
+            
+            # Save best model for this fold
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                fold_checkpoint = output_path / f"fold_{fold_idx}_best_model.pt"
+                torch.save({
+                    'fold': fold_idx + 1,
+                    'epoch': epoch + 1,
+                    'model_state_dict': model.state_dict(),
+                    'val_loss': best_val_loss,
+                }, fold_checkpoint)
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info(f"  Early stopping at epoch {epoch + 1}")
+                    break
+            
+            scheduler.step()
+        
+        # Record fold results
+        fold_results.append({
+            'fold': fold_idx + 1,
+            'best_val_loss': float(best_val_loss),
+            'history': fold_history,
+            'num_epochs': epoch + 1,
+        })
+        fold_models.append(model)
+        
+        logger.info(f"Fold {fold_idx + 1} complete - Best Val Loss: {best_val_loss:.4f}")
+        
+        # Cleanup fold data files
+        fold_train_path.unlink()
+        fold_val_path.unlink()
+    
+    # Summary
+    logger.info(f"\n{'='*60}")
+    logger.info(f"{k}-FOLD CROSS-VALIDATION SUMMARY")
+    logger.info(f"{'='*60}")
+    
+    val_losses = [r['best_val_loss'] for r in fold_results]
+    logger.info(f"Fold Results (Val Loss):")
+    for fold_result in fold_results:
+        logger.info(f"  Fold {fold_result['fold']}: {fold_result['best_val_loss']:.4f}")
+    
+    logger.info(f"\nMean Val Loss: {sum(val_losses) / len(val_losses):.4f}")
+    logger.info(f"Std Dev:      {(sum((x - sum(val_losses)/len(val_losses))**2 for x in val_losses) / len(val_losses))**0.5:.4f}")
+    logger.info(f"Best Fold:    Fold {fold_results[val_losses.index(min(val_losses))]['fold']} ({min(val_losses):.4f})")
+    
+    # Save cross-validation results
+    cv_results = {
+        'k': k,
+        'fold_results': fold_results,
+        'mean_val_loss': float(sum(val_losses) / len(val_losses)),
+        'best_fold': fold_results[val_losses.index(min(val_losses))]['fold'],
+    }
+    
+    with open(output_path / "kfold_results.json", 'w') as f:
+        json.dump(cv_results, f, indent=2)
+    
+    logger.info(f"\n✓ K-fold results saved to: {output_path / 'kfold_results.json'}")
+    
+    return fold_models, fold_results
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", required=True, help="Training data path")
-    parser.add_argument("--val", required=True, help="Validation data path")
-    parser.add_argument("--output", default="ml/models/checkpoints")
-    parser.add_argument("--epochs", type=int, default=NUM_EPOCHS)
+    parser.add_argument("--train", help="Training data path (for standard train/val split)")
+    parser.add_argument("--val", help="Validation data path (for standard train/val split)")
+    parser.add_argument("--data", help="Data path for stratified k-fold cross-validation")
+    parser.add_argument("--k", type=int, default=5, help="Number of folds for k-fold CV (default: 5)")
+    parser.add_argument("--output", default="ml/models/checkpoints", help="Output directory")
+    parser.add_argument("--epochs", type=int, default=NUM_EPOCHS, help="Number of epochs")
 
     args = parser.parse_args()
     NUM_EPOCHS = args.epochs
-
-    train_quick(args.train, args.val, args.output)
+    
+    if args.data:
+        # Stratified k-fold cross-validation
+        logger.info(f"Running stratified {args.k}-fold cross-validation on {args.data}")
+        train_with_stratified_kfold(args.data, k=args.k, output_dir=args.output)
+    elif args.train and args.val:
+        # Standard train/val split
+        logger.info(f"Running standard training with fixed train/val split")
+        train_quick(args.train, args.val, args.output)
+    else:
+        parser.error("Either provide --data (for k-fold) or both --train and --val (for standard split)")
