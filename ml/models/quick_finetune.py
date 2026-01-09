@@ -311,24 +311,31 @@ def train_with_stratified_kfold(data_path: str, k: int = 5, output_dir: str = "m
     df = pl.read_parquet(data_path)
     
     # Create stratification key based on primary signal
-    def get_primary_signal(signals: dict) -> str:
-        """Get primary signal category for stratification."""
-        if not signals:
-            return "none"
-        max_cat = max(
-            ((cat, (score, tag)) for cat, (score, tag) in signals.items() if abs(score) > 0.01),
-            key=lambda x: abs(x[1][0]),
-            default=("none", (0.0, ""))
-        )
-        return max_cat[0]
+    # Data has flattened columns: emergencies_score, emergencies_tag, etc.
+    def get_primary_signal_from_row(row) -> str:
+        """Get primary signal category from flattened columns."""
+        max_score = 0.0
+        max_cat = "none"
+        
+        for cat in SIGNAL_CATEGORIES:
+            score_col = f"{cat}_score"
+            if score_col in row:
+                score = abs(float(row[score_col]))
+                if score > 0.01 and score > max_score:
+                    max_score = score
+                    max_cat = cat
+        
+        return max_cat
     
-    df = df.with_columns(
-        pl.col("signals").map_elements(get_primary_signal, return_dtype=pl.Utf8).alias("_strat_key")
-    )
+    # Create stratification labels
+    strat_labels = []
+    for row in df.iter_rows(named=True):
+        strat_labels.append(get_primary_signal_from_row(row))
     
     # Convert to numpy for sklearn
-    X = df.drop("_strat_key").to_numpy()
-    y = df["_strat_key"].to_numpy()
+    import numpy as np
+    indices = np.arange(len(df))
+    y = np.array(strat_labels)
     
     # Setup stratified k-fold
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
@@ -336,15 +343,15 @@ def train_with_stratified_kfold(data_path: str, k: int = 5, output_dir: str = "m
     fold_results = []
     fold_models = []
     
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, y)):
         logger.info(f"\n{'='*60}")
         logger.info(f"FOLD {fold_idx + 1}/{k}")
         logger.info(f"{'='*60}")
         logger.info(f"Train size: {len(train_idx)}, Val size: {len(val_idx)}")
         
         # Create fold-specific datasets
-        train_df = df[train_idx].drop("_strat_key")
-        val_df = df[val_idx].drop("_strat_key")
+        train_df = df[train_idx]
+        val_df = df[val_idx]
         
         # Save fold data temporarily
         fold_train_path = output_path / f"fold_{fold_idx}_train.parquet"
