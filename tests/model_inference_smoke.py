@@ -133,102 +133,147 @@ def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple
     return True, None
 
 
-def run_real_news_tests(limit: int = 5, country: str = "sweden") -> Tuple[int, int, List[str]]:
-    """Fetch real news and ensure classifier returns at least one signal per article."""
-    print(f"\n📰 Real news integration test (country={country}, limit={limit})")
+def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden") -> Tuple[int, int, List[str]]:
+    """
+    Fetch real GDELT news articles per category and test model predictions.
+    
+    Args:
+        articles_per_category: Number of articles to test per category
+        country: Country code for GDELT
+        
+    Returns:
+        (passed, failed, errors)
+    """
+    print(f"\n📰 Real news category-specific test (country={country}, {articles_per_category} articles/category)")
     print("-" * 80)
-
-    try:
-        articles = fetch_news(country=country, max_articles=limit)
-    except Exception as exc:  # pragma: no cover - external API
-        print(f"❌ Failed to fetch news: {exc}")
-        return 0, 0, ["fetch_error"]
-
-    if articles.is_empty():
-        print("❌ No articles returned from GDELT; skipping real-news test")
-        return 0, 0, ["no_articles"]
 
     passed = 0
     failed = 0
     errors: List[str] = []
-
+    
     llm_agree = 0
     llm_disagree = 0
     llm_skipped = 0
-
-    for article in articles.iter_rows(named=True):
-        title = article.get("title") or article.get("documentIdentifier") or ""
-        description = article.get("summary") or article.get("content") or article.get("excerpt") or ""
-
-        if not title:
-            failed += 1
-            errors.append("missing_title")
-            print("  ❌ FAIL | missing title")
-            continue
-
-        result = model.classify(title, description)
-        if not result:
-            failed += 1
-            errors.append("empty_result")
-            print(f"  ❌ FAIL | {title[:60]}...")
-            print("        Error: No predictions")
-            continue
-
-        # Check top prediction using confidence-based selection
-        top_result = model.get_top_category(title, description)
-        if not top_result:
-            failed += 1
-            errors.append("empty_result")
-            print(f"  ❌ FAIL | {title[:60]}...")
-            print("        Error: No top category")
+    
+    categories = list(CATEGORY_KEYWORDS.keys())
+    
+    for category in categories:
+        print(f"\n  📦 Testing {category.upper()}...")
+        
+        try:
+            articles = fetch_articles_for_category(
+                category=category,
+                country=country,
+                num_articles=articles_per_category,
+                days_lookback=180
+            )
+        except Exception as e:
+            print(f"      ❌ Failed to fetch articles: {e}")
+            errors.append(f"{category}_fetch_error")
+            failed += articles_per_category
             continue
         
-        top_cat, top_score, top_tag, confidence = top_result
-        if top_score < -1.5 or top_score > 1.5:
-            failed += 1
-            errors.append("invalid_score")
-            print(f"  ❌ FAIL | {title[:60]}...")
-            print(f"        Error: Invalid score {top_score}")
+        if not articles:
+            print(f"      ⚠️  No articles found for {category}")
+            errors.append(f"{category}_no_articles")
             continue
-
-        # LLM adjudication for real-news outputs (best-effort)
-        llm_verdict = None
-        if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
-            llm_verdict = llm_judge_prediction(title, description, top_cat, top_score, top_tag)
-            if llm_verdict is not None:
-                if llm_verdict[0]:
-                    llm_agree += 1
+        
+        print(f"      → Fetched {len(articles)} articles")
+        
+        for article in articles:
+            title = article.get("title") or ""
+            description = article.get("description") or article.get("summary") or ""
+            
+            if not title:
+                failed += 1
+                errors.append(f"{category}_missing_title")
+                print(f"      ❌ FAIL | missing title")
+                continue
+            
+            # Classify with model
+            result = model.classify(title, description)
+            if not result:
+                failed += 1
+                errors.append(f"{category}_empty_result")
+                print(f"      ❌ FAIL | {title[:50]}...")
+                print(f"            Error: No predictions")
+                continue
+            
+            # Get top category
+            top_result = model.get_top_category(title, description)
+            if not top_result:
+                failed += 1
+                errors.append(f"{category}_no_top")
+                print(f"      ❌ FAIL | {title[:50]}...")
+                print(f"            Error: No top category")
+                continue
+            
+            top_cat, top_score, top_tag, confidence = top_result
+            
+            # Validate score range
+            if top_score < -1.5 or top_score > 1.5:
+                failed += 1
+                errors.append(f"{category}_invalid_score")
+                print(f"      ❌ FAIL | {title[:50]}...")
+                print(f"            Error: Invalid score {top_score}")
+                continue
+            
+            # Check if prediction matches expected category
+            is_correct = top_cat == category
+            
+            # LLM adjudication (optional)
+            llm_verdict = None
+            if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
+                llm_verdict = llm_judge_prediction(title, description, top_cat, top_score, top_tag, expected_category=category)
+                if llm_verdict is not None:
+                    if llm_verdict[0]:
+                        llm_agree += 1
+                    else:
+                        llm_disagree += 1
                 else:
-                    llm_disagree += 1
+                    llm_skipped += 1
             else:
                 llm_skipped += 1
-        else:
-            llm_skipped += 1
-
-        passed += 1
-        print(f"  ✅ PASS | {title[:60]}...")
-        print(f"        Top: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f} tag='{top_tag}'")
-        if llm_verdict:
-            verdict, reason = llm_verdict
-            status = "LLM agrees" if verdict else "LLM disagrees"
-            print(f"        LLM: {status} — {reason}")
-        elif HAS_OPENAI:
-            print("        LLM: skipped (no verdict)")
-        else:
-            print("        LLM: skipped (no OPENAI_API_KEY)")
-
-    if HAS_OPENAI:
-        print(f"\nLLM adjudication: agree={llm_agree}, disagree={llm_disagree}, skipped={llm_skipped}")
-
+            
+            # Determine pass/fail
+            if is_correct:
+                passed += 1
+                status = "✅ PASS"
+            else:
+                failed += 1
+                errors.append(f"{category}_wrong_prediction")
+                status = "❌ FAIL"
+            
+            print(f"      {status} | {title[:50]}...")
+            print(f"            Predicted: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f}")
+            print(f"            Expected:  {category:18s}")
+            
+            if llm_verdict:
+                verdict, reason = llm_verdict
+                llm_status = "LLM agrees" if verdict else "LLM disagrees"
+                print(f"            LLM: {llm_status} — {reason}")
+    
+    if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
+        print(f"\n  LLM adjudication: agree={llm_agree}, disagree={llm_disagree}, skipped={llm_skipped}")
+    
     return passed, failed, errors
 
 
-def llm_judge_prediction(title: str, description: str, category: str, score: float, tag: str) -> Optional[Tuple[bool, str]]:
+def llm_judge_prediction(
+    title: str, 
+    description: str, 
+    category: str, 
+    score: float, 
+    tag: str,
+    expected_category: str = None
+) -> Optional[Tuple[bool, str]]:
     """Ask the LLM whether the predicted category/tag makes sense for the article."""
     try:
         client = OpenAI()
     except Exception:
         return None
+
+    expected_text = f"\nExpected category: {expected_category}" if expected_category else ""
 
     prompt = f"""
 Article:
@@ -238,7 +283,7 @@ Description: {description[:600]}
 Model prediction:
 - Category: {category}
 - Score: {score:+.3f}
-- Tag: {tag}
+- Tag: {tag}{expected_text}
 
 Signal categories to choose from: emergencies, crime, festivals, transportation, weather_temp, weather_wet, sports, economics, politics.
 
@@ -257,74 +302,48 @@ Decide if the predicted category matches the article. Return strict JSON:
         data = json.loads(content)
         return bool(data.get("agree", False)), str(data.get("reason", "no reason provided"))
     except Exception as exc:  # pragma: no cover - best-effort guard
-        print(f"        LLM adjudication failed: {exc}")
         return None
 
 
 def run_tests() -> None:
     """Run all test cases and print results."""
-    # Check for API key
-    if not os.getenv("OPENAI_API_KEY"):
-        print("\n❌ ERROR: OPENAI_API_KEY environment variable not set")
-        print("Set it with: export OPENAI_API_KEY='your-key-here'")
-        sys.exit(1)
-    
     print("\n" + "=" * 80)
-    print("SWEDISH NEWS CLASSIFIER - COMPREHENSIVE LLM-BASED TEST")
+    print("SWEDISH NEWS CLASSIFIER - COMPREHENSIVE REAL GDELT SMOKE TEST")
     print("=" * 80)
-    print("Testing all 9 categories with LLM classifier...")
+    print("Testing all 9 categories with real GDELT articles per category...")
+    print("=" * 80)
     
     total = 0
     passed = 0
     failed_tests = []
     
-    for category, cases in TEST_CASES.items():
-        print(f"\n📦 Category: {category.upper()}")
-        print("-" * 80)
-        
-        for title, text, desc in cases:
-            total += 1
-            success, error = test_case(title, text, desc, category)
-            
-            # Get full result for display
-            top_result = model.get_top_category(text, desc, exclude_categories=['sports'])
-            if top_result:
-                top_cat, top_score, top_tag, confidence = top_result
-                status = "✅ PASS" if success else "❌ FAIL"
-                print(f"  {status} | {title}")
-                print(f"        Top: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f} tag='{top_tag}'")
-                
-                if not success:
-                    print(f"        Error: {error}")
-                    failed_tests.append((title, category, error))
-                    
-            else:
-                print(f"  ❌ FAIL | {title}")
-                print(f"        Error: No predictions")
-                failed_tests.append((title, category, "No predictions"))
-            
-            if success:
-                passed += 1
-    
-    # Real news integration tests
-    real_passed, real_failed, real_errors = run_real_news_tests()
+    # Real news category-specific tests (main test)
+    real_passed, real_failed, real_errors = run_real_news_tests(articles_per_category=3, country="sweden")
     passed += real_passed
     total += real_passed + real_failed
-    if real_failed:
-        failed_tests.append(("real_news_batch", "real_news", ",".join(real_errors)))
+    
+    if real_failed > 0:
+        for error in real_errors:
+            failed_tests.append(("real_news", error, "Category-specific test failure"))
 
     # Summary
     print("\n" + "=" * 80)
-    print(f"RESULTS: {passed}/{total} tests passed (including real news)")
+    print(f"RESULTS: {passed}/{total} tests passed")
     print("=" * 80)
 
     if failed_tests:
         print("\n❌ FAILURES:")
-        for title, category, error in failed_tests:
-            print(f"  - {title} (expected: {category})")
-            print(f"    {error}")
+        for category, error_type, description in failed_tests:
+            print(f"  - {category}: {error_type}")
+            print(f"    {description}")
     else:
         print("\n✅ ALL TESTS PASSED!")
+    
+    # Exit with appropriate code
+    if failed_tests:
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 if __name__ == "__main__":
