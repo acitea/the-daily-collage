@@ -37,7 +37,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml.ingestion.script import fetch_news, fetch_news_batched
+from ml.ingestion.script import fetch_news_batched
 from ml.utils.embedding_labeling import classify_article_embedding, load_tag_keywords
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
@@ -455,6 +455,7 @@ def fetch_and_label(
     max_llm_calls: int = None,
     llm_max_categories: int = 2,
     llm_batch_size: int = 15,
+    days_lookback: int = 60,
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them with embedding-based classification and optional local LLM verification.
@@ -472,6 +473,7 @@ def fetch_and_label(
         max_llm_calls: Maximum LLM API calls allowed (None = unlimited, default: 50)
         llm_max_categories: Max categories to keep per article after LLM pruning
         llm_batch_size: Max articles per LLM call to avoid context overflow
+        days_lookback: How many days back to search GDELT (max 360)
         
     Returns:
         Labeled DataFrame
@@ -486,20 +488,13 @@ def fetch_and_label(
     
     llm_call_count = {'calls': 0}
     print(f"📰 Fetching {num_articles} articles from {country}...")
-    
-    # Use batched fetching if more than 250 articles requested
-    if num_articles > 250:
-        df = fetch_news_batched(
-            country=country,
-            total_articles=num_articles,
-            batch_size=500,
-            days_lookback=60,
-        )
-    else:
-        df = fetch_news(
-            country=country,
-            max_articles=num_articles
-        )
+    # Always use batched fetching to allow longer lookback windows
+    df = fetch_news_batched(
+        country=country,
+        total_articles=num_articles,
+        batch_size=min(500, num_articles),
+        days_lookback=days_lookback,
+    )
     
     print(f"✓ Fetched {len(df)} articles\n")
     
@@ -756,6 +751,7 @@ def main():
     parser = argparse.ArgumentParser(description="Label GDELT articles with embedding-based classification + optional local LLM verification")
     parser.add_argument("--articles", type=int, default=500, help="Number of articles to fetch (default: 500)")
     parser.add_argument("--country", type=str, default="sweden", help="Country to fetch from (default: sweden)")
+    parser.add_argument("--days-lookback", type=int, default=60, help="How many days back to search (max 360)")
     parser.add_argument("--method", type=str, choices=["embedding", "keywords"], default="embedding", help="Labeling method (default: embedding)")
     parser.add_argument("--threshold", type=float, default=0.20, help="Similarity threshold (default: 0.20)")
     parser.add_argument("--output", type=str, default="data", help="Output directory (default: data/)")
@@ -777,6 +773,7 @@ def main():
     print("="*80)
     print(f"Country:           {args.country}")
     print(f"Articles:          {args.articles}")
+    print(f"Days lookback:     {args.days_lookback}")
     print(f"Method:            {args.method}")
     if args.method == "embedding":
         print(f"Threshold:         {args.threshold}")
@@ -813,6 +810,7 @@ def main():
         max_llm_calls=args.max_llm_calls if args.max_llm_calls > 0 else None,
         llm_max_categories=args.llm_max_categories,
         llm_batch_size=args.llm_batch_size,
+        days_lookback=args.days_lookback,
     )
     
     # Show statistics
