@@ -42,8 +42,8 @@ app = FastAPI(
 # Import modules
 try:
     from visualization.composition import VisualizationService
-    from server.services.hopsworks import get_or_create_hopsworks_service
-    from server.services.backfill import trigger_backfill_ingestion
+    from app.services.hopsworks import get_or_create_hopsworks_service
+    from app.services.backfill import trigger_backfill_ingestion
     from settings import settings
     from _types import (
         Hitbox,  # Use Hitbox directly (HitboxData removed)

@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.script import fetch_news
-from backend.server.services.hopsworks import get_or_create_hopsworks_service
+from backend.app.services.hopsworks import get_or_create_hopsworks_service
 from backend.settings import settings
 
 logging.basicConfig(

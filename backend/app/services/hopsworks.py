@@ -62,12 +62,7 @@ class HopsworksService:
             }
             
             if self.host:
-                # Parse host to extract region if it contains "c.app.hopsworks.ai"
-                if "c.app.hopsworks.ai" in self.host or "cloud.hopsworks.ai" in self.host:
-                    # Extract region from host (e.g., "c.app.hopsworks.ai" or specific region)
-                    connection_args["host"] = "c.app.hopsworks.ai"
-                else:
-                    connection_args["host"] = self.host
+                connection_args["host"] = self.host
                     
             self._project = hopsworks.login(**connection_args)
             self._fs = self._project.get_feature_store()
@@ -615,6 +610,7 @@ def get_or_create_hopsworks_service(
         return None
     
     try:
+        global instance
         if instance:
             return instance
 

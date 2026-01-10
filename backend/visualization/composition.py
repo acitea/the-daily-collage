@@ -233,7 +233,7 @@ class VisualizationService:
 
         if use_hopsworks:
             logger.info("Using Hopsworks storage backend")
-            from server.services.hopsworks import get_or_create_hopsworks_service
+            from app.services.hopsworks import get_or_create_hopsworks_service
 
             self.hopsworks_service = get_or_create_hopsworks_service(
                 api_key=settings.hopsworks.api_key,

@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Optional
 
-from server.services.hopsworks import HopsworksService
+from app.services.hopsworks import HopsworksService
 from storage.core import CacheMetadata, StorageBackend
 
 logger = logging.getLogger(__name__)
