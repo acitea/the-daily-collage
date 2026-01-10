@@ -712,6 +712,12 @@ def fetch_and_label(
             # Convert date column to datetime for event_time feature
             df_upload['date'] = pd.to_datetime(df_upload['date'], errors='coerce')
             
+            # Fill invalid dates with current timestamp
+            invalid_dates = df_upload['date'].isna().sum()
+            if invalid_dates > 0:
+                logger.warning(f"Found {invalid_dates} rows with invalid dates, filling with current timestamp")
+                df_upload['date'] = df_upload['date'].fillna(pd.Timestamp.now())
+            
             # Truncate long string columns to fit Hopsworks limits
             df_upload['title'] = df_upload['title'].str[:500]
             df_upload['description'] = df_upload['description'].str[:100]
