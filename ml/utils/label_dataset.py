@@ -709,6 +709,9 @@ def fetch_and_label(
             # Convert to pandas and truncate long strings to avoid schema issues
             df_upload = pd.DataFrame(labeled_rows)
             
+            # Convert date column to datetime for event_time feature
+            df_upload['date'] = pd.to_datetime(df_upload['date'], errors='coerce')
+            
             # Truncate long string columns to fit Hopsworks limits
             df_upload['title'] = df_upload['title'].str[:500]
             df_upload['description'] = df_upload['description'].str[:100]
