@@ -41,7 +41,6 @@ from ml.ingestion.script import fetch_news_batched
 from ml.utils.embedding_labeling import classify_article_embedding, load_tag_keywords
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
-from backend.server.services.hopsworks import create_hopsworks_service
 
 logger = logging.getLogger(__name__)
 
@@ -690,15 +689,48 @@ def fetch_and_label(
     if upload_to_hopsworks:
         if not hopsworks_api_key:
             raise ValueError("hopsworks_api_key required when upload_to_hopsworks=True")
-        service = create_hopsworks_service(
-            enabled=True,
-            api_key=hopsworks_api_key,
-            project_name=hopsworks_project,
-            host=hopsworks_host,
-        )
-        service.connect()
-        service.store_labeled_dataset(labeled_rows, fg_name=labels_fg, version=1)
-        print(f"✓ Uploaded labeled dataset ({len(labeled_rows)} rows) to Hopsworks FG '{labels_fg}'")
+        
+        try:
+            import hsfs
+            import pandas as pd
+            
+            # Connect directly to Hopsworks
+            host = hopsworks_host or "c.app.hopsworks.ai"
+            logger.info(f"Connecting to Hopsworks: {hopsworks_project} at {host}")
+            
+            connection = hsfs.connection(
+                host=host,
+                project=hopsworks_project,
+                api_key_value=hopsworks_api_key,
+            )
+            
+            # Get feature store
+            fs = connection.get_feature_store()
+            logger.info(f"Connected to feature store: {fs.name}")
+            
+            # Get or create feature group
+            try:
+                fg = fs.get_feature_group(name=labels_fg, version=1)
+                logger.info(f"Using existing feature group: {labels_fg} v1")
+            except Exception:
+                logger.info(f"Creating new feature group: {labels_fg} v1")
+                fg = fs.create_feature_group(
+                    name=labels_fg,
+                    version=1,
+                    description="Labeled dataset rows with scores/tags per category",
+                    primary_key=["url"],
+                    event_time="date",
+                    online_enabled=False,
+                )
+            
+            # Insert data
+            df_upload = pd.DataFrame(labeled_rows)
+            fg.insert(df_upload)
+            print(f"✓ Uploaded labeled dataset ({len(labeled_rows)} rows) to Hopsworks FG '{labels_fg}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to upload to Hopsworks: {e}")
+            raise
 
     return labeled_df
 
