@@ -174,15 +174,12 @@ def load_hopsworks_training_df(
     logger.info(f"Connected to feature store: {fs.name}")
 
     # Get feature group
+    logger.info(f"Fetching feature group: {fg_name} v{fg_version}")
     fg = fs.get_feature_group(name=fg_name, version=fg_version)
+    logger.info(f"Feature group schema: {fg.schema}")
     
-    query = fg.select_all()
-    if city:
-        query = query.filter(fg.city == city)
-    if limit:
-        query = query.limit(limit)
-
-    df_pd = query.read()
+    # Read data directly from feature group
+    df_pd = fg.read()
     if df_pd is None or df_pd.empty:
         raise ValueError("No labeled rows returned from Hopsworks feature group")
 
