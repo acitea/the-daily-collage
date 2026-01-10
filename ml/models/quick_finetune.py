@@ -513,25 +513,7 @@ if __name__ == "__main__":
     val_path = args.val
 
     if args.from_hopsworks:
-        if not args.hopsworks_api_key:
-            parser.error("--hopsworks-api-key is required when --from-hopsworks is set")
-
-        hops_df = load_hopsworks_training_df(
-            api_key=args.hopsworks_api_key,
-            project=args.hopsworks_project,
-            host=args.hopsworks_host,
-            fg_name=args.fg_name,
-            fg_version=args.fg_version,
-            city=args.city,
-            limit=args.limit,
-        )
-
-        train_path, val_path = materialize_train_val(
-            hops_df,
-            output_dir=args.output,
-            val_ratio=args.val_ratio,
-            prefix="hopsworks",
-        )
+        parser.error("Parquet-only mode: supply --train and --val parquet paths (Hopsworks fetch disabled)")
 
     if not train_path or not val_path:
         parser.error("Provide --train and --val paths or use --from-hopsworks")
