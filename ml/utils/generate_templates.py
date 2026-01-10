@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Dict, List
 import os
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 
 from openai import OpenAI
 from tqdm import tqdm
@@ -497,6 +498,34 @@ JSON:"""
             return {}
 
 
+def classify_articles_by_category(llm: TemplateLLM, articles: List[Dict], batch_size: int = 20) -> Dict[str, List[Dict]]:
+    """
+    Run LLM classification over all articles and bucket them into categories by best score.
+    """
+    categorized: Dict[str, List[Dict]] = {cat: [] for cat in SIGNAL_CATEGORIES}
+    seen_urls = set()
+
+    for start_idx in range(0, len(articles), batch_size):
+        batch = articles[start_idx:start_idx + batch_size]
+        resp = llm.classify_article_batch(batch)
+
+        for local_idx, scores in resp.items():
+            if not scores:
+                continue
+            best_cat = max(scores.items(), key=lambda kv: kv[1])[0]
+            global_idx = start_idx + (local_idx - 1)
+            if 0 <= global_idx < len(articles):
+                art = articles[global_idx]
+                url = art.get("url")
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
+                categorized[best_cat].append(art)
+
+    return categorized
+
+
 def fetch_articles_for_category(
     category: str,
     country: str,
@@ -667,12 +696,12 @@ def generate_templates_and_keywords(
     # Initialize LLM (only for parsing/cleanup if needed)
     llm = TemplateLLM(model_name=llm_model_name)
 
-    # Step 1: Fetch articles per category
+    # Step 1: Fetch articles per category (keyword seeds)
     logger.info(f"Fetching {articles_per_category} articles per category from GDELT (country={country}, lookback={days_lookback} days)...")
-    categorized_articles = {}
-    
+    seeded_articles = {}
+
     for category in SIGNAL_CATEGORIES:
-        logger.info(f"\n📰 Category: {category}")
+        logger.info(f"\n📰 Category seed fetch: {category}")
         articles = fetch_articles_for_category(
             category=category,
             country=country,
@@ -680,47 +709,53 @@ def generate_templates_and_keywords(
             days_lookback=days_lookback,
             allow_global=True,
         )
-        
-        if articles:
-            # Preprocess articles (remove stopwords, punctuation, stem)
-            logger.info(f"  Preprocessing {len(articles)} articles...")
-            for article in articles:
-                title = article.get('title', '')
-                desc = article.get('description', '')
-                combined = f"{title} {desc}"
-                # Store preprocessed text
-                article['preprocessed'] = preprocess_swedish_text(combined, remove_stopwords=True, stem=True)
-            
-            categorized_articles[category] = articles
-            logger.info(f"  ✓ {len(articles)} articles ready for {category}")
-        else:
-            logger.warning(f"  ⚠️  No articles found for {category}")
-            categorized_articles[category] = []
+        seeded_articles[category] = articles
+
+    all_seeded = list(chain.from_iterable(seeded_articles.values()))
+    logger.info(f"\n✓ Seed fetch complete — total articles collected: {len(all_seeded)}")
+
+    if not all_seeded:
+        logger.warning("⚠️  No articles fetched; generation will rely entirely on fallbacks")
+
+    # Step 2: LLM classification of all fetched articles
+    llm = TemplateLLM(model_name=llm_model_name)
+    logger.info("\nClassifying fetched articles into signal categories via LLM...")
+    classified_articles = classify_articles_by_category(llm, all_seeded, batch_size=20)
+
+    logger.info("Classified distribution:")
+    for cat in SIGNAL_CATEGORIES:
+        logger.info(f"  {cat:20s}: {len(classified_articles.get(cat, [])):3d} articles")
+
+    # Preprocess classified articles (remove stopwords, punctuation, stem)
+    for category, articles in classified_articles.items():
+        if not articles:
+            continue
+        logger.info(f"  Preprocessing {len(articles)} articles for {category}...")
+        for article in articles:
+            title = article.get('title', '')
+            desc = article.get('description', '')
+            combined = f"{title} {desc}"
+            article['preprocessed'] = preprocess_swedish_text(combined, remove_stopwords=True, stem=True)
     
-    logger.info(f"\n✓ Article fetching complete")
-    logger.info("Category distribution:")
-    for cat, arts in categorized_articles.items():
-        logger.info(f"  {cat:20s}: {len(arts):3d} articles")
-    
-    # Step 2: Generate templates for each category
+    # Step 3: Generate templates for each category (with fallback top-up)
     logger.info("\nGenerating signal templates (real articles only)...")
     signal_templates = {}
     
     for category in SIGNAL_CATEGORIES:
         all_templates = []
         
-        # Extract templates strictly from articles (no synthetic fallbacks)
-        if category in categorized_articles and len(categorized_articles[category]) >= 2:
-            logger.info(f"  {category}: extracting from articles...")
+        # Extract templates from LLM-classified articles
+        if category in classified_articles and len(classified_articles[category]) >= 2:
+            logger.info(f"  {category}: extracting from classified articles...")
             article_templates = llm.extract_templates(
-                categorized_articles[category],
+                classified_articles[category],
                 category,
                 max_templates=max(templates_per_category, MIN_ITEMS_PER_CATEGORY)
             )
             all_templates.extend(article_templates)
             logger.info(f"    ✓ Extracted {len(article_templates)} templates from articles")
         else:
-            logger.warning(f"  {category}: no articles available to extract templates")
+            logger.warning(f"  {category}: no classified articles available to extract templates")
         
         # Deduplicate while preserving order (case-insensitive)
         seen = set()
@@ -730,42 +765,51 @@ def generate_templates_and_keywords(
             if template_lower not in seen:
                 seen.add(template_lower)
                 unique_templates.append(template)
+
+        # Fallback top-up to reach minimum coverage
+        if len(unique_templates) < MIN_ITEMS_PER_CATEGORY:
+            need = MIN_ITEMS_PER_CATEGORY - len(unique_templates)
+            logger.info(f"    ↳ Adding {need} fallback templates for {category} to reach minimum {MIN_ITEMS_PER_CATEGORY}")
+            fallback_templates = llm.generate_fallback_templates(category, max_templates=need + 5)
+            for tmpl in fallback_templates:
+                if tmpl.lower() not in seen:
+                    seen.add(tmpl.lower())
+                    unique_templates.append(tmpl)
         
         signal_templates[category] = unique_templates
         logger.info(f"    → Total (after dedup): {len(unique_templates)} templates")
-
-        if len(unique_templates) < MIN_ITEMS_PER_CATEGORY:
-            logger.warning(
-                f"Category {category} has only {len(unique_templates)} templates (< {MIN_ITEMS_PER_CATEGORY}); continuing without hard failure"
-            )
     
-    # Step 3: Generate keywords for each category
+    # Step 4: Generate keywords for each category (with fallback top-up)
     logger.info("\nGenerating tag keywords (real articles only)...")
     tag_keywords = {}
     
     for category in SIGNAL_CATEGORIES:
         all_keywords = {}
         
-        # Extract keywords strictly from articles (no synthetic fallbacks)
-        if category in categorized_articles and len(categorized_articles[category]) >= 2:
-            logger.info(f"  {category}: extracting from articles...")
+        # Extract keywords from LLM-classified articles
+        if category in classified_articles and len(classified_articles[category]) >= 2:
+            logger.info(f"  {category}: extracting from classified articles...")
             article_keywords = llm.extract_keywords(
-                categorized_articles[category],
+                classified_articles[category],
                 category,
                 max_keywords=max(keywords_per_category, MIN_ITEMS_PER_CATEGORY)
             )
             all_keywords.update(article_keywords)
             logger.info(f"    ✓ Extracted {len(article_keywords)} keywords from articles")
         else:
-            logger.warning(f"  {category}: no articles available to extract keywords")
+            logger.warning(f"  {category}: no classified articles available to extract keywords")
+
+        # Fallback top-up to reach minimum coverage
+        if len(all_keywords) < MIN_ITEMS_PER_CATEGORY:
+            need = MIN_ITEMS_PER_CATEGORY - len(all_keywords)
+            logger.info(f"    ↳ Adding {need} fallback keywords for {category} to reach minimum {MIN_ITEMS_PER_CATEGORY}")
+            fallback_keywords = llm.generate_fallback_keywords(category, max_keywords=need + 10)
+            for k, v in fallback_keywords.items():
+                if k not in all_keywords and len(all_keywords) < MIN_ITEMS_PER_CATEGORY:
+                    all_keywords[k] = v
         
         tag_keywords[category] = all_keywords
         logger.info(f"    → Total (after dedup): {len(all_keywords)} keywords")
-
-        if len(all_keywords) < MIN_ITEMS_PER_CATEGORY:
-            logger.warning(
-                f"Category {category} has only {len(all_keywords)} keywords (< {MIN_ITEMS_PER_CATEGORY}); continuing without hard failure"
-            )
     
     # Step 4: Save to JSON files
     output_dir.mkdir(parents=True, exist_ok=True)
