@@ -187,10 +187,23 @@ def load_hopsworks_training_df(
         raise ValueError("No labeled rows returned from Hopsworks feature group")
 
     df = pl.from_pandas(df_pd)
+    
+    # Ensure all expected columns are present and handle nulls
     df = df.with_columns([
         pl.col("title").fill_null("").alias("title"),
         pl.col("description").fill_null("").alias("description"),
+        pl.col("tone").fill_null(0.0).alias("tone"),
+        pl.col("url").fill_null("").alias("url"),
+        pl.col("source").fill_null("").alias("source"),
     ])
+    
+    # Fill null scores and tags for all categories
+    for category in SIGNAL_CATEGORIES:
+        if f"{category}_score" in df.columns:
+            df = df.with_columns(pl.col(f"{category}_score").fill_null(0.0))
+        if f"{category}_tag" in df.columns:
+            df = df.with_columns(pl.col(f"{category}_tag").fill_null(""))
+    
     df = _filter_labeled_rows(df)
 
     if df.is_empty():
@@ -404,7 +417,7 @@ if __name__ == "__main__":
     parser.add_argument("--hopsworks-api-key", type=str, default=None, help="Hopsworks API key")
     parser.add_argument("--hopsworks-project", type=str, default="daily_collage", help="Hopsworks project name")
     parser.add_argument("--hopsworks-host", type=str, default=None, help="Optional Hopsworks host override")
-    parser.add_argument("--fg-name", type=str, default="headline_classifications", help="Feature group name for labels")
+    parser.add_argument("--fg-name", type=str, default="headline_labels", help="Feature group name for labels")
     parser.add_argument("--fg-version", type=int, default=1, help="Feature group version")
     parser.add_argument("--city", type=str, default=None, help="Optional city filter for training rows")
     parser.add_argument("--limit", type=int, default=None, help="Optional row limit when pulling from Hopsworks")
