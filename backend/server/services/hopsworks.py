@@ -68,8 +68,8 @@ class HopsworksService:
                 api_key_value=self.api_key,
             )
             
-            # Get feature store
-            self._fs = connection.get_feature_store()
+            # Get feature store (explicitly pass project name)
+            self._fs = connection.get_feature_store(name=self.project_name)
             logger.info(f"Connected to feature store: {self._fs.name}")
             
             # Try to get model registry (requires separate import)
