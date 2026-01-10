@@ -258,7 +258,6 @@ class VisualizationService:
         vibe_vector: Dict[str, float],
         timestamp: Optional[datetime] = None,
         force_regenerate: bool = False,
-        source_articles: Optional[List[Dict]] = None,
     ) -> Tuple[bytes, Dict]:
         """
         Get or generate visualization for a city and vibe vector.
@@ -303,8 +302,6 @@ class VisualizationService:
             timestamp=timestamp,
             image_data=image_data,
             hitboxes=hitboxes,
-            vibe_vector=vibe_vector,  # Not stored but kept for API compatibility
-            source_articles=source_articles or [],  # Not stored but kept for API compatibility
         )
 
         return image_data, {

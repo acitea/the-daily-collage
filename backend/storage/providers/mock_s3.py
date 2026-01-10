@@ -36,7 +36,7 @@ class MockS3StorageBackend(StorageBackend):
         """Retrieve metadata."""
         return self.metadata.get(cache_key)
 
-    def put_metadata(self, metadata: CacheMetadata) -> None:
+    def put_metadata(self, cache_key: str, metadata: CacheMetadata) -> None:
         """Store metadata."""
         self.metadata[metadata.cache_key] = metadata
         logger.info(f"Mock S3: Stored metadata {metadata.cache_key}")

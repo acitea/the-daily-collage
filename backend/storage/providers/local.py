@@ -83,7 +83,7 @@ class LocalStorageBackend(StorageBackend):
                 logger.error(f"Failed to parse metadata {cache_key}: {e}")
         return None
 
-    def put_metadata(self, metadata: CacheMetadata) -> None:
+    def put_metadata(self, cache_key: str, metadata: CacheMetadata) -> None:
         """Store metadata."""
         self.metadata_store[metadata.cache_key] = metadata.to_dict()
         self._save_metadata_store()

@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 def trigger_backfill_ingestion(
     city: str,
     country: str,
-    hopsworks_service,
     active_backfills: Set[str],
     max_articles: int = 250,
 ):

@@ -141,7 +141,7 @@ class HopsworksStorageBackend(StorageBackend):
             logger.debug(f"Failed to retrieve metadata {cache_key}: {e}")
             return None
 
-    def put_metadata(self, metadata: CacheMetadata) -> None:
+    def put_metadata(self, cache_key: str, metadata: CacheMetadata) -> None:
         """Store metadata in Hopsworks dataset as JSON."""
         if not self._is_connected():
             logger.warning("Not connected to Hopsworks, cannot store metadata")
@@ -153,7 +153,7 @@ class HopsworksStorageBackend(StorageBackend):
             
             # Create temporary directory and write file
             with tempfile.TemporaryDirectory() as tmpdir:
-                filename = f"{metadata.cache_key}_metadata.json"
+                filename = f"{cache_key}_metadata.json"
                 local_path = os.path.join(tmpdir, filename)
                 
                 # Write metadata to file

@@ -82,7 +82,7 @@ class VibeCache:
             cache_key=cache_key,
             hitboxes=hitboxes,
         )
-        self.storage.put_metadata(metadata)
+        self.storage.put_metadata(cache_key, metadata)
 
         logger.info(f"Cached: {cache_key}")
         return cache_key, metadata

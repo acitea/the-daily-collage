@@ -154,7 +154,7 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
-    def put_metadata(self, metadata: CacheMetadata) -> None:
+    def put_metadata(self, cache_key: str, metadata: CacheMetadata) -> None:
         """Store metadata."""
         pass
 

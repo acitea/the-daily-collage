@@ -329,7 +329,6 @@ async def get_vibe(
                 trigger_backfill_ingestion,
                 city=city,
                 country=country,
-                hopsworks_service=hopsworks_service,
                 active_backfills=active_backfills,
                 max_articles=250,
             )
@@ -369,7 +368,6 @@ async def get_vibe(
             city=city,
             vibe_vector=vibe_vector,
             timestamp=timestamp,
-            source_articles=source_articles,
             force_regenerate=regenerate,
         )
         
@@ -531,19 +529,11 @@ async def get_visualization_image(
             for category, (score, tag, count) in vibe_data.items()
         }
         
-        # Get source articles
-        source_articles = []
-        try:
-            source_articles = hopsworks_service.get_headlines_for_city(city=city, timestamp=timestamp)
-        except Exception as e:
-            logger.warning(f"Could not retrieve source articles: {e}")
-        
         # Regenerate visualization
         image_data, new_metadata = viz_service.generate_or_get(
             city=city,
             vibe_vector=vibe_vector,
             timestamp=timestamp,
-            source_articles=source_articles,
             force_regenerate=True,
         )
         
@@ -763,27 +753,6 @@ async def get_signal_categories():
         for category, metadata in category_metadata.items()
     ]
     return JSONResponse(content={"categories": categories})
-
-
-@app.get("/api/cache-stats", tags=["Monitoring"])
-async def get_cache_stats():
-    """Get visualization cache statistics."""
-    if not viz_service:
-        raise HTTPException(
-            status_code=503, detail="Visualization service not initialized"
-        )
-
-    try:
-        # Storage backend stats (if available)
-        backend_type = settings.storage.backend
-        stats = {
-            "storage_backend": backend_type,
-            "deprecated_cache_stats": viz_service.deprecated_cache.get_stats(),
-        }
-        return JSONResponse(content=stats)
-    except Exception as e:
-        logger.error(f"Error fetching cache stats: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
