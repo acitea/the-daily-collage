@@ -462,6 +462,8 @@ def fetch_and_label(
     hopsworks_project: str = "daily_collage",
     hopsworks_host: str | None = None,
     labels_fg: str = "headline_labels",
+    generate_templates_if_missing: bool = True,
+    templates_articles: int = 100,
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them with embedding-based classification and optional local LLM verification.
@@ -480,10 +482,42 @@ def fetch_and_label(
         llm_max_categories: Max categories to keep per article after LLM pruning
         llm_batch_size: Max articles per LLM call to avoid context overflow
         days_lookback: How many days back to search GDELT (max 360)
+        generate_templates_if_missing: If True, auto-generate templates if JSON files don't exist
+        templates_articles: Number of articles to use for template generation (if needed)
         
     Returns:
         Labeled DataFrame
     """
+    # Check if templates exist, generate if needed
+    templates_file = PROJECT_ROOT / "data" / "signal_templates.json"
+    keywords_file = PROJECT_ROOT / "data" / "tag_keywords.json"
+    
+    if method == "embedding" and (not templates_file.exists() or not keywords_file.exists()):
+        if generate_templates_if_missing:
+            print("\n⚠️  Template/keyword files not found. Generating them now...")
+            print(f"    This will fetch {templates_articles} articles per category and may take several minutes.\n")
+            
+            # Import here to avoid circular dependency
+            from ml.utils.generate_templates import generate_templates_and_keywords
+            
+            generate_templates_and_keywords(
+                articles_per_category=templates_articles,
+                country=country,
+                llm_model_name="gpt-3.5-turbo",
+                templates_per_category=30,
+                keywords_per_category=25,
+                output_dir=PROJECT_ROOT / "data",
+                days_lookback=360,
+                total_articles=900,
+                llm_batch_size=20,
+            )
+            print("\n✓ Template generation complete. Continuing with labeling...\n")
+        else:
+            raise FileNotFoundError(
+                f"Template files not found: {templates_file} and {keywords_file}. "
+                "Run generate_templates.py first or set generate_templates_if_missing=True"
+            )
+    
     # Set default API limit
     if llm_verify:
         if max_llm_calls is None:
@@ -790,6 +824,10 @@ def main():
     parser.add_argument("--hopsworks-project", type=str, default="daily_collage", help="Hopsworks project name")
     parser.add_argument("--hopsworks-host", type=str, default=None, help="Optional Hopsworks host override")
     parser.add_argument("--labels-fg", type=str, default="headline_labels", help="Feature group name for labeled dataset")
+    parser.add_argument("--generate-templates", action="store_true", help="Auto-generate templates if missing (default: True)")
+    parser.add_argument("--no-generate-templates", action="store_false", dest="generate_templates", help="Fail if templates missing instead of generating")
+    parser.add_argument("--templates-articles", type=int, default=100, help="Articles per category for template generation (default: 100)")
+    parser.set_defaults(generate_templates=True)
     
     args = parser.parse_args()
     
@@ -841,6 +879,8 @@ def main():
         hopsworks_project=args.hopsworks_project,
         hopsworks_host=args.hopsworks_host,
         labels_fg=args.labels_fg,
+        generate_templates_if_missing=args.generate_templates,
+        templates_articles=args.templates_articles,
     )
     
     # Show statistics
