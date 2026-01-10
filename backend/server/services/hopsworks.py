@@ -54,20 +54,23 @@ class HopsworksService:
         try:
             import hsfs
             
-            # Build connection arguments
-            host = self.host if self.host else "c.app.hopsworks.ai"
+            logger.info(f"Connecting to Hopsworks project: {self.project_name}")
             
-            logger.info(f"Connecting to Hopsworks: host={host}, project={self.project_name}")
+            # Build connection arguments - let hsfs auto-detect host and engine for managed cloud
+            connection_kwargs = {
+                "project": self.project_name,
+                "api_key_value": self.api_key,
+            }
             
-            # Use the connection method with proper parameters and Python engine
-            connection = hsfs.connection(
-                host=host,
-                project=self.project_name,
-                api_key_value=self.api_key,
-                engine="python",  # Use Python engine for managed Hopsworks
-            )
+            # Only specify host if explicitly provided (for on-premise installations)
+            if self.host:
+                connection_kwargs["host"] = self.host
+                logger.info(f"Using custom host: {self.host}")
             
-            # Get feature store (name parameter is optional, defaults to project name + "_featurestore")
+            # Create connection
+            connection = hsfs.connection(**connection_kwargs)
+            
+            # Get feature store
             self._fs = connection.get_feature_store()
             logger.info(f"Connected to feature store: {self._fs.name}")
             
@@ -87,8 +90,10 @@ class HopsworksService:
             
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
+            logger.error(f"Project: {self.project_name}")
+            if self.host:
+                logger.error(f"Host: {self.host}")
             logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
-            logger.error(f"Connection details: host={self.host or 'c.app.hopsworks.ai'}, project={self.project_name}")
             logger.error("For managed Hopsworks, ensure your API key is valid and the project exists")
             raise
             
