@@ -54,19 +54,17 @@ class HopsworksService:
         try:
             import hsfs
             
-            connection_args = {
-                "project": self.project_name,
-                "api_key_value": self.api_key,
-            }
+            # Build connection arguments
+            host = self.host if self.host else "c.app.hopsworks.ai"
             
-            if self.host:
-                # Use the host as provided
-                connection_args["host"] = self.host
-            else:
-                # Default to Hopsworks managed cloud
-                connection_args["host"] = "c.app.hopsworks.ai"
-                    
-            connection = hsfs.connection(**connection_args)
+            # Use the connection method with proper parameters
+            connection = hsfs.connection(
+                host=host,
+                project=self.project_name,
+                api_key_value=self.api_key,
+            )
+            
+            # Get feature store (name parameter is optional, defaults to project name + "_featurestore")
             self._fs = connection.get_feature_store()
             
             # Try to get model registry (requires separate import)
@@ -85,6 +83,7 @@ class HopsworksService:
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
             logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
+            logger.error(f"Connection details: host={self.host or 'c.app.hopsworks.ai'}, project={self.project_name}")
             raise
             
     def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
