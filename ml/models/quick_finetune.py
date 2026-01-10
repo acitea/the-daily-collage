@@ -540,15 +540,34 @@ if __name__ == "__main__":
         
         hops_project = hopsworks.login(**login_kwargs)
         mr = hops_project.get_model_registry()
-        
+
         # Create model
         model_metadata = mr.python.create_model(
             name=args.model_name,
             version=args.model_version,
             metrics={"val_loss": float(best_val_loss)},
             description="Fine-tuned multi-head news classifier",
+            input_example={"title": "Example headline", "description": "Example description"},
         )
-        
-        # Save model files
-        model_metadata.save(str(best_checkpoint))
-        logger.info(f"✓ Model registered to Hopsworks: {args.model_name}")
+
+        # Include serving code and dependencies alongside the checkpoint
+        from pathlib import Path as _Path
+        import shutil as _shutil
+
+        output_dir = _Path(args.output)
+        serving_src = _Path(__file__).resolve().parent / "serving"
+        model_py = serving_src / "model.py"
+        reqs_txt = serving_src / "requirements.txt"
+        if model_py.exists():
+            _shutil.copy(model_py, output_dir / "model.py")
+        if reqs_txt.exists():
+            _shutil.copy(reqs_txt, output_dir / "requirements.txt")
+
+        # Ensure checkpoint uses the expected filename for serving handler
+        target_ckpt = output_dir / "best_model.pt"
+        if not target_ckpt.exists():
+            _shutil.copy(best_checkpoint, target_ckpt)
+
+        # Register directory with code + checkpoint + requirements
+        model_metadata.save(str(output_dir))
+        logger.info(f"✓ Model registered to Hopsworks (with serving code): {args.model_name}")
