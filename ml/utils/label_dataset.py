@@ -693,7 +693,6 @@ def fetch_and_label(
         try:
             import hopsworks
             import pandas as pd
-            from hsfs.feature import Feature
             
             # Connect to Hopsworks project
             logger.info(f"Connecting to Hopsworks project: {hopsworks_project}")
@@ -707,25 +706,24 @@ def fetch_and_label(
             fs = project.get_feature_store()
             logger.info(f"Connected to feature store: {fs.name}")
             
-            # Convert to pandas first
+            # Convert to pandas and truncate long strings to avoid schema issues
             df_upload = pd.DataFrame(labeled_rows)
             
-            # Define features with explicit string lengths for long columns
-            features = [
-                Feature(name="title", type="string(500)"),
-                Feature(name="description", type="string(2000)"),
-                Feature(name="tone", type="float"),
-                Feature(name="url", type="string(1000)"),
-                Feature(name="source", type="string(200)"),
-                Feature(name="date", type="string(50)"),
-            ]
+            # Truncate long string columns to fit Hopsworks limits
+            df_upload['title'] = df_upload['title'].str[:500]
+            df_upload['description'] = df_upload['description'].str[:2000]
+            df_upload['url'] = df_upload['url'].str[:1000]
+            df_upload['source'] = df_upload['source'].str[:200]
             
-            # Add signal score and tag features for each category
+            # Truncate tag columns
             for category in SIGNAL_CATEGORIES:
-                features.append(Feature(name=f"{category}_score", type="float"))
-                features.append(Feature(name=f"{category}_tag", type="string(100)"))
+                tag_col = f"{category}_tag"
+                if tag_col in df_upload.columns:
+                    df_upload[tag_col] = df_upload[tag_col].str[:100]
             
-            # Get or create feature group with explicit schema
+            logger.info(f"Truncated long strings to fit Hopsworks schema limits")
+            
+            # Get or create feature group - let Hopsworks infer schema from DataFrame
             fg = fs.get_or_create_feature_group(
                 name=labels_fg,
                 version=1,
@@ -733,7 +731,6 @@ def fetch_and_label(
                 primary_key=["url"],
                 event_time="date",
                 online_enabled=False,
-                features=features,
             )
             logger.info(f"Using feature group: {labels_fg} v1")
             
