@@ -656,7 +656,7 @@ def fetch_and_label(
         labeled_row = {
             "title": row.get("title", ""),
             "description": row.get("description", ""),
-            "tone": float(tone) if tone is not None else None,
+            "tone": float(tone) if tone is not None else 0.0,
             "url": row.get("url", ""),
             "source": row.get("source", ""),
             "date": str(row.get("date", "")),
