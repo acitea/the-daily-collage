@@ -445,6 +445,7 @@ def run_ingestion_pipeline(
         headlines.append({
             "article_id": article_id,
             "title": title,
+            "description": description,
             "url": url,
             "source": source,
             "classifications": classifications,

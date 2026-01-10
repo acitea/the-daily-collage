@@ -46,6 +46,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from ml.ingestion.script import normalize_country_input
 from ml.utils.embedding_labeling import preprocess_swedish_text
 from gdeltdoc import GdeltDoc, Filters
+from backend.server.services.hopsworks import create_hopsworks_service
 
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -687,6 +688,12 @@ def generate_templates_and_keywords(
     days_lookback: int = 360,
     total_articles: int = 1000,
     llm_batch_size: int = 20,
+    upload_to_hopsworks: bool = False,
+    hopsworks_api_key: str | None = None,
+    hopsworks_project: str = "daily_collage",
+    hopsworks_host: str | None = None,
+    templates_fg: str = "signal_templates",
+    keywords_fg: str = "tag_keywords",
 ):
     """
     Main pipeline to generate templates and keywords by fetching articles per category.
@@ -835,6 +842,21 @@ def generate_templates_and_keywords(
     with open(keywords_file, 'w', encoding='utf-8') as f:
         json.dump(tag_keywords, f, indent=2, ensure_ascii=False)
     logger.info(f"✓ Saved tag keywords to {keywords_file}")
+
+    # Optional: Upload to Hopsworks Feature Store
+    if upload_to_hopsworks:
+        if not hopsworks_api_key:
+            raise ValueError("hopsworks_api_key required when upload_to_hopsworks=True")
+        service = create_hopsworks_service(
+            enabled=True,
+            api_key=hopsworks_api_key,
+            project_name=hopsworks_project,
+            host=hopsworks_host,
+        )
+        service.connect()
+        service.store_signal_templates(signal_templates, fg_name=templates_fg, version=1)
+        service.store_tag_keywords(tag_keywords, fg_name=keywords_fg, version=1)
+        logger.info("✓ Uploaded templates and keywords to Hopsworks Feature Store")
     
     # Print summary
     logger.info("\n" + "="*60)
@@ -881,6 +903,12 @@ def main():
                         help="Approximate total articles to fetch across all categories (default: 1000)")
     parser.add_argument("--llm-batch-size", type=int, default=20,
                         help="Number of articles per LLM classification call (default: 20; higher = fewer calls)")
+    parser.add_argument("--upload-to-hopsworks", action="store_true", help="Upload templates/keywords to Hopsworks Feature Store")
+    parser.add_argument("--hopsworks-api-key", type=str, default=None, help="Hopsworks API key")
+    parser.add_argument("--hopsworks-project", type=str, default="daily_collage", help="Hopsworks project name")
+    parser.add_argument("--hopsworks-host", type=str, default=None, help="Optional Hopsworks host override")
+    parser.add_argument("--templates-fg", type=str, default="signal_templates", help="Feature group name for templates")
+    parser.add_argument("--keywords-fg", type=str, default="tag_keywords", help="Feature group name for keywords")
     
     args = parser.parse_args()
     
@@ -894,6 +922,12 @@ def main():
         days_lookback=args.days_lookback,
         total_articles=args.total_articles,
         llm_batch_size=args.llm_batch_size,
+        upload_to_hopsworks=args.upload_to_hopsworks,
+        hopsworks_api_key=args.hopsworks_api_key,
+        hopsworks_project=args.hopsworks_project,
+        hopsworks_host=args.hopsworks_host,
+        templates_fg=args.templates_fg,
+        keywords_fg=args.keywords_fg,
     )
 
 

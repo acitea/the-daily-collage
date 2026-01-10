@@ -41,6 +41,7 @@ from ml.ingestion.script import fetch_news_batched
 from ml.utils.embedding_labeling import classify_article_embedding, load_tag_keywords
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES
 from ml.utils.intensity_calibration import calibrate_article_labels
+from backend.server.services.hopsworks import create_hopsworks_service
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +457,11 @@ def fetch_and_label(
     llm_max_categories: int = 2,
     llm_batch_size: int = 15,
     days_lookback: int = 60,
+    upload_to_hopsworks: bool = False,
+    hopsworks_api_key: str | None = None,
+    hopsworks_project: str = "daily_collage",
+    hopsworks_host: str | None = None,
+    labels_fg: str = "headline_labels",
 ) -> pl.DataFrame:
     """
     Fetch articles and auto-label them with embedding-based classification and optional local LLM verification.
@@ -646,6 +652,20 @@ def fetch_and_label(
         print(f"📊 Local LLM Verification: {llm_call_count['calls']} batch call(s)")
         print(f"   (Free! Running locally on {'GPU' if torch.cuda.is_available() else 'CPU'})")
     
+    # Optional upload to Hopsworks Feature Store
+    if upload_to_hopsworks:
+        if not hopsworks_api_key:
+            raise ValueError("hopsworks_api_key required when upload_to_hopsworks=True")
+        service = create_hopsworks_service(
+            enabled=True,
+            api_key=hopsworks_api_key,
+            project_name=hopsworks_project,
+            host=hopsworks_host,
+        )
+        service.connect()
+        service.store_labeled_dataset(labeled_rows, fg_name=labels_fg, version=1)
+        print(f"✓ Uploaded labeled dataset ({len(labeled_rows)} rows) to Hopsworks FG '{labels_fg}'")
+
     return labeled_df
 
 
@@ -765,6 +785,11 @@ def main():
     parser.add_argument("--llm-max-categories", type=int, default=2, help="Max categories to keep after LLM pruning (default: 2)")
     parser.add_argument("--llm-batch-size", type=int, default=15, help="Max articles per LLM call (default: 15)")
     parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2", help="HuggingFace model for LLM verification")
+    parser.add_argument("--upload-to-hopsworks", action="store_true", help="Upload labeled dataset to Hopsworks Feature Store")
+    parser.add_argument("--hopsworks-api-key", type=str, default=None, help="Hopsworks API key")
+    parser.add_argument("--hopsworks-project", type=str, default="daily_collage", help="Hopsworks project name")
+    parser.add_argument("--hopsworks-host", type=str, default=None, help="Optional Hopsworks host override")
+    parser.add_argument("--labels-fg", type=str, default="headline_labels", help="Feature group name for labeled dataset")
     
     args = parser.parse_args()
     
@@ -811,6 +836,11 @@ def main():
         llm_max_categories=args.llm_max_categories,
         llm_batch_size=args.llm_batch_size,
         days_lookback=args.days_lookback,
+        upload_to_hopsworks=args.upload_to_hopsworks,
+        hopsworks_api_key=args.hopsworks_api_key,
+        hopsworks_project=args.hopsworks_project,
+        hopsworks_host=args.hopsworks_host,
+        labels_fg=args.labels_fg,
     )
     
     # Show statistics

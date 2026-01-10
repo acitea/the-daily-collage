@@ -86,6 +86,7 @@ class HopsworksService:
         - city: string
         - timestamp: timestamp (event_time)
         - title: string
+        - description: string
         - url: string
         - source: string
         - emergencies_score: float
@@ -207,6 +208,169 @@ class HopsworksService:
         except Exception as e:
             logger.error(f"Failed to create feature group: {e}")
             raise
+
+    def get_or_create_templates_feature_group(self, fg_name: str = "signal_templates", version: int = 1):
+        """
+        Feature group for storing signal templates.
+
+        Schema:
+        - category: string
+        - template: string
+        - created_at: timestamp
+        """
+        if not self._fs:
+            self.connect()
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Signal templates per category",
+                primary_key=["category", "template"],
+                event_time="created_at",
+                online_enabled=True,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def get_or_create_keywords_feature_group(self, fg_name: str = "tag_keywords", version: int = 1):
+        """
+        Feature group for storing tag keywords.
+
+        Schema:
+        - category: string
+        - keyword: string
+        - tag: string
+        - created_at: timestamp
+        """
+        if not self._fs:
+            self.connect()
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Tag keywords per category",
+                primary_key=["category", "keyword"],
+                event_time="created_at",
+                online_enabled=True,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def store_signal_templates(self, templates: Dict[str, List[str]], fg_name: str = "signal_templates", version: int = 1):
+        """Insert signal templates into the feature group."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_templates_feature_group(fg_name, version)
+        rows = []
+        now = datetime.utcnow()
+        for category, tmpl_list in templates.items():
+            for tmpl in tmpl_list:
+                rows.append({
+                    "category": category,
+                    "template": tmpl,
+                    "created_at": now,
+                })
+        try:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(rows)} templates into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store templates: {e}")
+            raise
+
+    def store_tag_keywords(self, keywords: Dict[str, Dict[str, str]], fg_name: str = "tag_keywords", version: int = 1):
+        """Insert tag keywords into the feature group."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_keywords_feature_group(fg_name, version)
+        rows = []
+        now = datetime.utcnow()
+        for category, kv in keywords.items():
+            for k, v in kv.items():
+                rows.append({
+                    "category": category,
+                    "keyword": k,
+                    "tag": v,
+                    "created_at": now,
+                })
+        try:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(rows)} tag keywords into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store tag keywords: {e}")
+            raise
+
+    def get_or_create_headline_labels_feature_group(self, fg_name: str = "headline_labels", version: int = 1):
+        """
+        Feature group for storing labeled dataset rows.
+        Similar to headline_classifications but intended for training sets.
+        """
+        if not self._fs:
+            self.connect()
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Labeled dataset rows with scores/tags per category",
+                primary_key=["url"],
+                event_time="date",
+                online_enabled=False,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def store_labeled_dataset(self, labeled_rows: List[Dict], fg_name: str = "headline_labels", version: int = 1):
+        """Insert labeled dataset rows into Hopsworks."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_headline_labels_feature_group(fg_name, version)
+        try:
+            import pandas as pd
+            df = pd.DataFrame(labeled_rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(labeled_rows)} labeled rows into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store labeled dataset: {e}")
+            raise
     
     def store_headline_classifications(
         self,
@@ -239,6 +403,7 @@ class HopsworksService:
                 "city": city,
                 "timestamp": timestamp,
                 "title": headline.get("title", ""),
+                "description": headline.get("description", ""),
                 "url": headline.get("url", ""),
                 "source": headline.get("source", ""),
             }
@@ -468,6 +633,41 @@ class HopsworksService:
             
         except Exception:
             return False
+
+    def register_model(
+        self,
+        model_dir: str,
+        name: str,
+        metrics: Optional[Dict] = None,
+        description: str = "",
+        version: Optional[int] = None,
+    ):
+        """
+        Register a trained model in the Hopsworks Model Registry.
+
+        Args:
+            model_dir: Local directory containing the serialized model artifacts
+            name: Model name in the registry
+            metrics: Optional evaluation metrics to log
+            description: Optional description
+            version: Optional version to set; if None, Hopsworks will auto-increment
+        """
+        if not self._mr:
+            self.connect()
+
+        try:
+            model = self._mr.python.create_model(
+                name=name,
+                metrics=metrics or {},
+                description=description,
+                version=version,
+            )
+            model.save(model_dir)
+            logger.info(f"Registered model '{name}' from {model_dir}")
+            return model
+        except Exception as e:
+            logger.error(f"Failed to register model '{name}': {e}")
+            raise
 
 
 class MockHopsworksService:

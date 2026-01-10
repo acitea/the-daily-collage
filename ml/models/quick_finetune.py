@@ -16,12 +16,14 @@ from tqdm import tqdm
 import sys
 import json
 from datetime import datetime
+from typing import Optional, Tuple
 
 # Add project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES, TAG_VOCAB
+from backend.server.services.hopsworks import create_hopsworks_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +39,7 @@ logger.info(f"Using device: {DEVICE}")
 BASE_MODEL = "KB/bert-base-swedish-cased"
 MAX_LENGTH = 512
 BATCH_SIZE = 32 if torch.cuda.is_available() else 8
-NUM_EPOCHS = 10
+NUM_EPOCHS = 8
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 SCORE_LOSS_WEIGHT = 0.4
@@ -134,6 +136,88 @@ class QuickNewsClassifier(nn.Module):
         return results
 
 
+def _filter_labeled_rows(df: pl.DataFrame) -> pl.DataFrame:
+    """Keep only rows that have at least one non-empty tag or non-zero score."""
+    label_masks = []
+    for cat in SIGNAL_CATEGORIES:
+        label_masks.append(pl.col(f"{cat}_tag").cast(pl.Utf8).fill_null("") != "")
+        label_masks.append(pl.col(f"{cat}_score").cast(pl.Float64).fill_null(0.0) != 0.0)
+
+    combined_mask = pl.any_horizontal(label_masks)
+    return df.filter(combined_mask)
+
+
+def load_hopsworks_training_df(
+    api_key: str,
+    project: str,
+    host: Optional[str],
+    fg_name: str,
+    fg_version: int,
+    city: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> pl.DataFrame:
+    """Load labeled headlines from Hopsworks feature group and return a polars DataFrame."""
+    service = create_hopsworks_service(
+        enabled=True,
+        api_key=api_key,
+        project_name=project,
+        host=host,
+    )
+    service.connect()
+
+    fg = service.get_or_create_headline_feature_group(fg_name, fg_version)
+    query = fg.select_all()
+    if city:
+        query = query.filter(fg.city == city)
+    if limit:
+        query = query.limit(limit)
+
+    df_pd = query.read()
+    if df_pd is None or df_pd.empty:
+        raise ValueError("No labeled rows returned from Hopsworks feature group")
+
+    df = pl.from_pandas(df_pd)
+    df = df.with_columns([
+        pl.col("title").fill_null("").alias("title"),
+        pl.col("description").fill_null("").alias("description"),
+    ])
+    df = _filter_labeled_rows(df)
+
+    if df.is_empty():
+        raise ValueError("All rows from Hopsworks were unlabeled; nothing to train on")
+
+    return df
+
+
+def materialize_train_val(
+    df: pl.DataFrame,
+    output_dir: str,
+    val_ratio: float = 0.2,
+    prefix: str = "hopsworks",
+) -> Tuple[str, str]:
+    """Shuffle, split, and persist train/val parquet files from a polars DataFrame."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    shuffled = df.sample(fraction=1.0, shuffle=True, with_replacement=False)
+    val_size = max(1, int(len(shuffled) * val_ratio)) if len(shuffled) > 0 else 0
+
+    val_df = shuffled.head(val_size) if val_size > 0 else pl.DataFrame()
+    train_df = shuffled.tail(len(shuffled) - val_size) if val_size > 0 else shuffled
+
+    if len(train_df) == 0 or len(val_df) == 0:
+        raise ValueError("Not enough rows to create a non-empty train/val split")
+
+    train_path = output_path / f"{prefix}_train.parquet"
+    val_path = output_path / f"{prefix}_val.parquet"
+
+    train_df.write_parquet(train_path)
+    val_df.write_parquet(val_path)
+
+    logger.info(f"Materialized train/val to {train_path} and {val_path}")
+    return str(train_path), str(val_path)
+
+
 def train_epoch(model, loader, optimizer, device):
     """Train one epoch."""
     model.train()
@@ -213,7 +297,7 @@ def validate(model, loader, device):
     return total_loss / len(loader)
 
 
-def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/checkpoints"):
+def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/checkpoints") -> Tuple[QuickNewsClassifier, float, Path]:
     """Quick training loop."""
     
     output_path = Path(output_dir)
@@ -243,6 +327,7 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
     
     # Training
     best_val_loss = float('inf')
+    best_checkpoint = output_path / "best_model.pt"
     history = []
     patience = 3
     patience_counter = 0
@@ -266,13 +351,12 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            checkpoint = output_path / "best_model.pt"
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'val_loss': best_val_loss,
-            }, checkpoint)
-            logger.info(f"✓ Saved best model: {checkpoint}")
+            }, best_checkpoint)
+            logger.info(f"✓ Saved best model: {best_checkpoint}")
         else:
             patience_counter += 1
             logger.warning(f"No improvement. Patience: {patience_counter}/{patience}")
@@ -288,9 +372,9 @@ def train_quick(train_path: str, val_path: str, output_dir: str = "ml/models/che
         json.dump(history, f)
 
     logger.info(f"\n✓ Training complete! Best val_loss: {best_val_loss:.4f}")
-    logger.info(f"✓ Model saved to: {output_path / 'best_model.pt'}")
+    logger.info(f"✓ Model saved to: {best_checkpoint}")
 
-    return model
+    return model, best_val_loss, best_checkpoint
 
 
 def train_with_stratified_kfold(*args, **kwargs):
@@ -302,13 +386,70 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", required=True, help="Training data path (parquet)")
-    parser.add_argument("--val", required=True, help="Validation data path (parquet)")
+    parser.add_argument("--train", required=False, help="Training data path (parquet)")
+    parser.add_argument("--val", required=False, help="Validation data path (parquet)")
     parser.add_argument("--output", default="ml/models/checkpoints", help="Output directory")
     parser.add_argument("--epochs", type=int, default=NUM_EPOCHS, help="Number of epochs")
+    parser.add_argument("--from-hopsworks", action="store_true", help="Load train/val from Hopsworks feature group")
+    parser.add_argument("--hopsworks-api-key", type=str, default=None, help="Hopsworks API key")
+    parser.add_argument("--hopsworks-project", type=str, default="daily_collage", help="Hopsworks project name")
+    parser.add_argument("--hopsworks-host", type=str, default=None, help="Optional Hopsworks host override")
+    parser.add_argument("--fg-name", type=str, default="headline_classifications", help="Feature group name for labels")
+    parser.add_argument("--fg-version", type=int, default=1, help="Feature group version")
+    parser.add_argument("--city", type=str, default=None, help="Optional city filter for training rows")
+    parser.add_argument("--limit", type=int, default=None, help="Optional row limit when pulling from Hopsworks")
+    parser.add_argument("--val-ratio", type=float, default=0.2, help="Validation split ratio when pulling from Hopsworks")
+    parser.add_argument("--register-to-hopsworks", action="store_true", help="Register trained model to Hopsworks Model Registry")
+    parser.add_argument("--model-name", type=str, default="daily_collage_classifier", help="Model registry name")
+    parser.add_argument("--model-version", type=int, default=None, help="Optional model version for registry")
 
     args = parser.parse_args()
     NUM_EPOCHS = args.epochs
     
-    logger.info(f"Running standard training with fixed train/val split")
-    train_quick(args.train, args.val, args.output)
+    train_path = args.train
+    val_path = args.val
+
+    if args.from_hopsworks:
+        if not args.hopsworks_api_key:
+            parser.error("--hopsworks-api-key is required when --from-hopsworks is set")
+
+        hops_df = load_hopsworks_training_df(
+            api_key=args.hopsworks_api_key,
+            project=args.hopsworks_project,
+            host=args.hopsworks_host,
+            fg_name=args.fg_name,
+            fg_version=args.fg_version,
+            city=args.city,
+            limit=args.limit,
+        )
+
+        train_path, val_path = materialize_train_val(
+            hops_df,
+            output_dir=args.output,
+            val_ratio=args.val_ratio,
+            prefix="hopsworks",
+        )
+
+    if not train_path or not val_path:
+        parser.error("Provide --train and --val paths or use --from-hopsworks")
+
+    logger.info(f"Running training with train={train_path} val={val_path}")
+    model, best_val_loss, best_checkpoint = train_quick(train_path, val_path, args.output)
+
+    if args.register_to_hopsworks:
+        if not args.hopsworks_api_key:
+            parser.error("--hopsworks-api-key is required when --register-to-hopsworks is set")
+
+        service = create_hopsworks_service(
+            enabled=True,
+            api_key=args.hopsworks_api_key,
+            project_name=args.hopsworks_project,
+            host=args.hopsworks_host,
+        )
+        service.register_model(
+            model_dir=args.output,
+            name=args.model_name,
+            metrics={"val_loss": float(best_val_loss)},
+            description="Fine-tuned multi-head news classifier",
+            version=args.model_version,
+        )
