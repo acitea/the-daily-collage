@@ -31,6 +31,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 import os
+from datetime import datetime, timedelta, timezone
 
 from openai import OpenAI
 from tqdm import tqdm
@@ -97,6 +98,11 @@ SHORT_KEYWORD_EXPANSIONS = {
         "väg": ["vägstängd", "väg avstängd"],
         "kö": ["kö trafik", "trafikkö"],
     },
+    "crime": {
+        "åtal": ["åtal väcks", "åtal mot"],
+        "rån": ["butiksrån", "vapenrån", "rån mot bank"],
+        "mord": ["misstänkt mord"],
+    },
     "weather_wet": {
         "snö": ["snöoväder", "snöfall"],
         "regn": ["kraftigt regn"],
@@ -109,6 +115,7 @@ SHORT_KEYWORD_EXPANSIONS = {
 
 # Minimum required items per category (strictly from real articles)
 MIN_ITEMS_PER_CATEGORY = 50
+MIN_KEYWORD_LEN = 5
 
 
 def normalize_category(raw: str) -> str:
@@ -496,6 +503,7 @@ def fetch_articles_for_category(
     num_articles: int = 100,
     days_lookback: int = 360,
     allow_global: bool = False,
+    window_days: int = 30,
 ) -> list:
     """
     Fetch GDELT articles specifically for one category using keyword filtering.
@@ -527,7 +535,7 @@ def fetch_articles_for_category(
         extra = expansions.get(kw)
         if extra:
             query_terms.extend(extra)
-        elif len(kw) < 3:
+        elif len(kw) < MIN_KEYWORD_LEN:
             logger.debug(f"Skipping too-short keyword '{kw}' for {category}; no expansion found")
             continue
         else:
@@ -549,63 +557,86 @@ def fetch_articles_for_category(
     if category in {"transportation", "weather_temp", "weather_wet", "sports", "economics"}:
         max_kw = min(len(query_terms), 8)
 
-    for keyword in query_terms[:max_kw]:
-        try:
-            gd = GdeltDoc()
-            filters = Filters(
-                country=fips_code,
-                keyword=keyword,
-                num_records=min(250, articles_per_keyword),
-                timespan=f"{days_lookback}d",
-            )
-            
-            articles_pd = gd.article_search(filters)
-            
-            if articles_pd is not None and not articles_pd.empty:
-                articles_pl = pl.from_pandas(articles_pd)
-                
-                # Deduplicate by URL
-                for article in articles_pl.iter_rows(named=True):
-                    url = article.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_articles.append(article)
-                
-                logger.debug(f"  Keyword '{keyword}': {len(articles_pl)} articles, unique: {len(all_articles)}")
-            
-            # Small delay between keyword queries
-            time.sleep(0.3)
-            
-            # Stop if we have enough
-            if len(all_articles) >= num_articles:
-                break
-                
-        except Exception as e:
-            logger.error(f"Failed to fetch articles for keyword '{keyword}': {e}")
-            continue
-    
-    logger.info(f"  → Fetched {len(all_articles)} unique articles for {category}")
+    def _iter_windows(total_days: int, step_days: int):
+        now = datetime.now(timezone.utc)
+        for offset in range(0, total_days, step_days):
+            end = now - timedelta(days=offset)
+            start = end - timedelta(days=step_days)
+            yield start, end
 
-    # If insufficient and allowed, retry with global (no country filter)
-    if allow_global and len(all_articles) < num_articles:
-        logger.info(f"  Insufficient articles for {category} (have {len(all_articles)} < {num_articles}); retrying without country filter")
-        try:
-            for keyword in query_terms[:max_kw]:
+    # Query by windows to bypass per-call caps
+    for start_dt, end_dt in _iter_windows(days_lookback, window_days):
+        start_str = start_dt.strftime('%Y%m%d%H%M%S')
+        end_str = end_dt.strftime('%Y%m%d%H%M%S')
+
+        for keyword in query_terms[:max_kw]:
+            try:
                 gd = GdeltDoc()
                 filters = Filters(
+                    country=fips_code,
                     keyword=keyword,
+                    start_date=start_dt,
+                    end_date=end_dt,
                     num_records=min(250, articles_per_keyword),
-                    timespan=f"{days_lookback}d",
                 )
+
                 articles_pd = gd.article_search(filters)
+
                 if articles_pd is not None and not articles_pd.empty:
                     articles_pl = pl.from_pandas(articles_pd)
+
+                    # Deduplicate by URL
                     for article in articles_pl.iter_rows(named=True):
                         url = article.get("url", "")
                         if url and url not in seen_urls:
                             seen_urls.add(url)
                             all_articles.append(article)
-                time.sleep(0.3)
+
+                    logger.debug(
+                        f"  Window {start_str}-{end_str} keyword '{keyword}': {len(articles_pl)} articles, unique: {len(all_articles)}"
+                    )
+
+                time.sleep(0.15)
+
+                if len(all_articles) >= num_articles:
+                    break
+
+            except Exception as e:
+                logger.error(f"Failed to fetch articles for keyword '{keyword}' window {start_str}-{end_str}: {e}")
+                continue
+
+        if len(all_articles) >= num_articles:
+            break
+    
+    logger.info(f"  → Fetched {len(all_articles)} unique articles for {category}")
+
+    # If insufficient and allowed, retry with global (no country filter) using same windowed strategy
+    if allow_global and len(all_articles) < num_articles:
+        logger.info(f"  Insufficient articles for {category} (have {len(all_articles)} < {num_articles}); retrying without country filter")
+        try:
+            for start_dt, end_dt in _iter_windows(days_lookback, window_days):
+                start_str = start_dt.strftime('%Y%m%d%H%M%S')
+                end_str = end_dt.strftime('%Y%m%d%H%M%S')
+
+                for keyword in query_terms[:max_kw]:
+                    gd = GdeltDoc()
+                    filters = Filters(
+                        keyword=keyword,
+                        start_date=start_dt,
+                        end_date=end_dt,
+                        num_records=min(250, articles_per_keyword),
+                    )
+                    articles_pd = gd.article_search(filters)
+                    if articles_pd is not None and not articles_pd.empty:
+                        articles_pl = pl.from_pandas(articles_pd)
+                        for article in articles_pl.iter_rows(named=True):
+                            url = article.get("url", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                all_articles.append(article)
+                    time.sleep(0.15)
+                    if len(all_articles) >= num_articles:
+                        break
                 if len(all_articles) >= num_articles:
                     break
         except Exception as e:  # pragma: no cover - defensive
