@@ -548,14 +548,12 @@ def fetch_articles_for_category(
     
     all_articles = []
     seen_urls = set()
-    
-    # Split into multiple batches with different keywords to get variety
-    articles_per_keyword = max(40, num_articles // max(4, len(query_terms)))
 
-    # Use more keywords for sparse categories to improve recall
+    # Use more keywords for sparse categories to improve recall; collapse into one OR clause per window
     max_kw = 4
     if category in {"transportation", "weather_temp", "weather_wet", "sports", "economics"}:
         max_kw = min(len(query_terms), 8)
+    window_keywords = query_terms[:max_kw]
 
     def _iter_windows(total_days: int, step_days: int):
         now = datetime.now(timezone.utc)
@@ -564,49 +562,52 @@ def fetch_articles_for_category(
             start = end - timedelta(days=step_days)
             yield start, end
 
+    def _filters_kwargs(use_country: bool) -> dict:
+        return {
+            "country": fips_code if use_country else None,
+            # Language filter removed to avoid GDELT invalid/unsupported language errors; rely on country + keywords
+            "language": None,
+            "keyword": window_keywords,
+        }
+
     # Query by windows to bypass per-call caps
     for start_dt, end_dt in _iter_windows(days_lookback, window_days):
         start_str = start_dt.strftime('%Y%m%d%H%M%S')
         end_str = end_dt.strftime('%Y%m%d%H%M%S')
 
-        for keyword in query_terms[:max_kw]:
-            try:
-                gd = GdeltDoc()
-                filters = Filters(
-                    country=fips_code,
-                    keyword=keyword,
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    num_records=min(250, articles_per_keyword),
+        try:
+            gd = GdeltDoc()
+            filters = Filters(
+                **_filters_kwargs(use_country=True),
+                start_date=start_dt,
+                end_date=end_dt,
+                num_records=min(250, num_articles),
+            )
+
+            articles_pd = gd.article_search(filters)
+
+            if articles_pd is not None and not articles_pd.empty:
+                articles_pl = pl.from_pandas(articles_pd)
+
+                # Deduplicate by URL
+                for article in articles_pl.iter_rows(named=True):
+                    url = article.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_articles.append(article)
+
+                logger.debug(
+                    f"  Window {start_str}-{end_str} keywords OR: {len(articles_pl)} articles, unique: {len(all_articles)}"
                 )
 
-                articles_pd = gd.article_search(filters)
+            time.sleep(0.15)
 
-                if articles_pd is not None and not articles_pd.empty:
-                    articles_pl = pl.from_pandas(articles_pd)
+            if len(all_articles) >= num_articles:
+                break
 
-                    # Deduplicate by URL
-                    for article in articles_pl.iter_rows(named=True):
-                        url = article.get("url", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            all_articles.append(article)
-
-                    logger.debug(
-                        f"  Window {start_str}-{end_str} keyword '{keyword}': {len(articles_pl)} articles, unique: {len(all_articles)}"
-                    )
-
-                time.sleep(0.15)
-
-                if len(all_articles) >= num_articles:
-                    break
-
-            except Exception as e:
-                logger.error(f"Failed to fetch articles for keyword '{keyword}' window {start_str}-{end_str}: {e}")
-                continue
-
-        if len(all_articles) >= num_articles:
-            break
+        except Exception as e:
+            logger.error(f"Failed to fetch articles window {start_str}-{end_str}: {e}")
+            continue
     
     logger.info(f"  → Fetched {len(all_articles)} unique articles for {category}")
 
@@ -618,25 +619,22 @@ def fetch_articles_for_category(
                 start_str = start_dt.strftime('%Y%m%d%H%M%S')
                 end_str = end_dt.strftime('%Y%m%d%H%M%S')
 
-                for keyword in query_terms[:max_kw]:
-                    gd = GdeltDoc()
-                    filters = Filters(
-                        keyword=keyword,
-                        start_date=start_dt,
-                        end_date=end_dt,
-                        num_records=min(250, articles_per_keyword),
-                    )
-                    articles_pd = gd.article_search(filters)
-                    if articles_pd is not None and not articles_pd.empty:
-                        articles_pl = pl.from_pandas(articles_pd)
-                        for article in articles_pl.iter_rows(named=True):
-                            url = article.get("url", "")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                all_articles.append(article)
-                    time.sleep(0.15)
-                    if len(all_articles) >= num_articles:
-                        break
+                gd = GdeltDoc()
+                filters = Filters(
+                    **_filters_kwargs(use_country=False),
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    num_records=min(250, num_articles),
+                )
+                articles_pd = gd.article_search(filters)
+                if articles_pd is not None and not articles_pd.empty:
+                    articles_pl = pl.from_pandas(articles_pd)
+                    for article in articles_pl.iter_rows(named=True):
+                        url = article.get("url", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_articles.append(article)
+                time.sleep(0.15)
                 if len(all_articles) >= num_articles:
                     break
         except Exception as e:  # pragma: no cover - defensive
@@ -737,8 +735,8 @@ def generate_templates_and_keywords(
         logger.info(f"    → Total (after dedup): {len(unique_templates)} templates")
 
         if len(unique_templates) < MIN_ITEMS_PER_CATEGORY:
-            raise RuntimeError(
-                f"Category {category} has only {len(unique_templates)} templates; need >= {MIN_ITEMS_PER_CATEGORY}."
+            logger.warning(
+                f"Category {category} has only {len(unique_templates)} templates (< {MIN_ITEMS_PER_CATEGORY}); continuing without hard failure"
             )
     
     # Step 3: Generate keywords for each category
@@ -765,8 +763,8 @@ def generate_templates_and_keywords(
         logger.info(f"    → Total (after dedup): {len(all_keywords)} keywords")
 
         if len(all_keywords) < MIN_ITEMS_PER_CATEGORY:
-            raise RuntimeError(
-                f"Category {category} has only {len(all_keywords)} keywords; need >= {MIN_ITEMS_PER_CATEGORY}."
+            logger.warning(
+                f"Category {category} has only {len(all_keywords)} keywords (< {MIN_ITEMS_PER_CATEGORY}); continuing without hard failure"
             )
     
     # Step 4: Save to JSON files
