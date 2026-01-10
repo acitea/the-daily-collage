@@ -691,21 +691,18 @@ def fetch_and_label(
             raise ValueError("hopsworks_api_key required when upload_to_hopsworks=True")
         
         try:
-            import hsfs
+            import hopsworks
             import pandas as pd
             
-            # Connect directly to Hopsworks
-            host = hopsworks_host or "c.app.hopsworks.ai"
-            logger.info(f"Connecting to Hopsworks: {hopsworks_project} at {host}")
-            
-            connection = hsfs.connection(
-                host=host,
-                project=hopsworks_project,
+            # Connect to Hopsworks project
+            logger.info(f"Connecting to Hopsworks project: {hopsworks_project}")
+            project = hopsworks.login(
                 api_key_value=hopsworks_api_key,
+                project=hopsworks_project
             )
             
             # Get feature store
-            fs = connection.get_feature_store()
+            fs = project.get_feature_store()
             logger.info(f"Connected to feature store: {fs.name}")
             
             # Get or create feature group
