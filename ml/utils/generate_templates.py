@@ -33,6 +33,7 @@ from typing import Dict, List
 import os
 from datetime import datetime, timedelta, timezone
 from itertools import chain
+import math
 
 from openai import OpenAI
 from tqdm import tqdm
@@ -505,6 +506,10 @@ def classify_articles_by_category(llm: TemplateLLM, articles: List[Dict], batch_
     categorized: Dict[str, List[Dict]] = {cat: [] for cat in SIGNAL_CATEGORIES}
     seen_urls = set()
 
+    # Clamp to avoid accidental per-article calls
+    batch_size = max(5, batch_size)
+    logger.info(f"Classifying {len(articles)} articles in batches of {batch_size}...")
+
     for start_idx in range(0, len(articles), batch_size):
         batch = articles[start_idx:start_idx + batch_size]
         resp = llm.classify_article_batch(batch)
@@ -680,6 +685,8 @@ def generate_templates_and_keywords(
     keywords_per_category: int,
     output_dir: Path,
     days_lookback: int = 360,
+    total_articles: int = 1000,
+    llm_batch_size: int = 20,
 ):
     """
     Main pipeline to generate templates and keywords by fetching articles per category.
@@ -697,7 +704,11 @@ def generate_templates_and_keywords(
     llm = TemplateLLM(model_name=llm_model_name)
 
     # Step 1: Fetch articles per category (keyword seeds)
-    logger.info(f"Fetching {articles_per_category} articles per category from GDELT (country={country}, lookback={days_lookback} days)...")
+    per_category_target = max(articles_per_category, math.ceil(total_articles / len(SIGNAL_CATEGORIES)))
+    logger.info(
+        f"Fetching ~{per_category_target} articles per category (~{per_category_target * len(SIGNAL_CATEGORIES)} total target) "
+        f"from GDELT (country={country}, lookback={days_lookback} days)..."
+    )
     seeded_articles = {}
 
     for category in SIGNAL_CATEGORIES:
@@ -705,7 +716,7 @@ def generate_templates_and_keywords(
         articles = fetch_articles_for_category(
             category=category,
             country=country,
-            num_articles=articles_per_category,
+            num_articles=per_category_target,
             days_lookback=days_lookback,
             allow_global=True,
         )
@@ -720,7 +731,7 @@ def generate_templates_and_keywords(
     # Step 2: LLM classification of all fetched articles
     llm = TemplateLLM(model_name=llm_model_name)
     logger.info("\nClassifying fetched articles into signal categories via LLM...")
-    classified_articles = classify_articles_by_category(llm, all_seeded, batch_size=20)
+    classified_articles = classify_articles_by_category(llm, all_seeded, batch_size=llm_batch_size)
 
     logger.info("Classified distribution:")
     for cat in SIGNAL_CATEGORIES:
@@ -829,9 +840,9 @@ def generate_templates_and_keywords(
     logger.info("\n" + "="*60)
     logger.info("SUMMARY")
     logger.info("="*60)
-    logger.info(f"Articles fetched per category: {articles_per_category} (target)")
+    logger.info(f"Articles fetched per category target: {per_category_target}")
     logger.info(f"Days searched: {days_lookback}")
-    logger.info(f"Total articles collected: {sum(len(arts) for arts in categorized_articles.values())}")
+    logger.info(f"Total articles collected (post-classification pool): {len(all_seeded)}")
     logger.info(f"Templates generated: {sum(len(t) for t in signal_templates.values())}")
     logger.info(f"Keywords generated: {sum(len(k) for k in tag_keywords.values())}")
     
@@ -866,6 +877,10 @@ def main():
                         help="How many days to search back (max 360)")
     parser.add_argument("--output-dir", type=Path, default=Path("data"), 
                         help="Output directory for JSON files")
+    parser.add_argument("--total-articles", type=int, default=1000,
+                        help="Approximate total articles to fetch across all categories (default: 1000)")
+    parser.add_argument("--llm-batch-size", type=int, default=20,
+                        help="Number of articles per LLM classification call (default: 20; higher = fewer calls)")
     
     args = parser.parse_args()
     
@@ -877,6 +892,8 @@ def main():
         keywords_per_category=args.keywords_per_category,
         output_dir=args.output_dir,
         days_lookback=args.days_lookback,
+        total_articles=args.total_articles,
+        llm_batch_size=args.llm_batch_size,
     )
 
 
