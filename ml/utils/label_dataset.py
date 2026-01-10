@@ -710,8 +710,14 @@ def fetch_and_label(
             try:
                 fg = fs.get_feature_group(name=labels_fg, version=1)
                 logger.info(f"Using existing feature group: {labels_fg} v1")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Feature group {labels_fg} not found: {e}")
                 logger.info(f"Creating new feature group: {labels_fg} v1")
+                
+                # Convert to pandas first to infer schema
+                df_upload = pd.DataFrame(labeled_rows)
+                
+                # Create feature group with explicit schema from dataframe
                 fg = fs.create_feature_group(
                     name=labels_fg,
                     version=1,
@@ -720,9 +726,11 @@ def fetch_and_label(
                     event_time="date",
                     online_enabled=False,
                 )
+                logger.info(f"Created feature group: {labels_fg} v1")
             
             # Insert data
-            df_upload = pd.DataFrame(labeled_rows)
+            if 'df_upload' not in locals():
+                df_upload = pd.DataFrame(labeled_rows)
             fg.insert(df_upload)
             print(f"✓ Uploaded labeled dataset ({len(labeled_rows)} rows) to Hopsworks FG '{labels_fg}'")
             
