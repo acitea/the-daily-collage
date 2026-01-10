@@ -107,6 +107,9 @@ SHORT_KEYWORD_EXPANSIONS = {
     },
 }
 
+# Minimum required items per category (strictly from real articles)
+MIN_ITEMS_PER_CATEGORY = 50
+
 
 def normalize_category(raw: str) -> str:
     """Map common variants/synonyms to canonical SIGNAL_CATEGORIES.
@@ -492,6 +495,7 @@ def fetch_articles_for_category(
     country: str,
     num_articles: int = 100,
     days_lookback: int = 360,
+    allow_global: bool = False,
 ) -> list:
     """
     Fetch GDELT articles specifically for one category using keyword filtering.
@@ -532,7 +536,7 @@ def fetch_articles_for_category(
     if not query_terms:
         query_terms = keywords  # fallback to original list if everything was skipped
 
-    logger.info(f"Fetching articles for {category} with keywords: {query_terms[:3]}...")
+    logger.info(f"Fetching articles for {category} with keywords: {query_terms[:3]} (country={country})...")
     
     all_articles = []
     seen_urls = set()
@@ -581,6 +585,32 @@ def fetch_articles_for_category(
             continue
     
     logger.info(f"  → Fetched {len(all_articles)} unique articles for {category}")
+
+    # If insufficient and allowed, retry with global (no country filter)
+    if allow_global and len(all_articles) < num_articles:
+        logger.info(f"  Insufficient articles for {category} (have {len(all_articles)} < {num_articles}); retrying without country filter")
+        try:
+            for keyword in query_terms[:max_kw]:
+                gd = GdeltDoc()
+                filters = Filters(
+                    keyword=keyword,
+                    num_records=min(250, articles_per_keyword),
+                    timespan=f"{days_lookback}d",
+                )
+                articles_pd = gd.article_search(filters)
+                if articles_pd is not None and not articles_pd.empty:
+                    articles_pl = pl.from_pandas(articles_pd)
+                    for article in articles_pl.iter_rows(named=True):
+                        url = article.get("url", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_articles.append(article)
+                time.sleep(0.3)
+                if len(all_articles) >= num_articles:
+                    break
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Global fetch fallback failed for {category}: {e}")
+
     return all_articles
 
 
@@ -605,17 +635,8 @@ def generate_templates_and_keywords(
         output_dir: Directory to save JSON files
         days_lookback: How many days to search back (max 360)
     """
-    # Initialize LLM
+    # Initialize LLM (only for parsing/cleanup if needed)
     llm = TemplateLLM(model_name=llm_model_name)
-    
-    # Per-category fallback targets for sparse signals
-    sparse_categories = {"transportation", "weather_temp", "weather_wet", "sports", "economics"}
-    fallback_templates_min = {
-        cat: 30 if cat in sparse_categories else 20 for cat in SIGNAL_CATEGORIES
-    }
-    fallback_keywords_min = {
-        cat: 30 if cat in sparse_categories else 20 for cat in SIGNAL_CATEGORIES
-    }
 
     # Step 1: Fetch articles per category
     logger.info(f"Fetching {articles_per_category} articles per category from GDELT (country={country}, lookback={days_lookback} days)...")
@@ -628,6 +649,7 @@ def generate_templates_and_keywords(
             country=country,
             num_articles=articles_per_category,
             days_lookback=days_lookback,
+            allow_global=True,
         )
         
         if articles:
@@ -652,31 +674,24 @@ def generate_templates_and_keywords(
         logger.info(f"  {cat:20s}: {len(arts):3d} articles")
     
     # Step 2: Generate templates for each category
-    logger.info("\nGenerating signal templates...")
+    logger.info("\nGenerating signal templates (real articles only)...")
     signal_templates = {}
     
     for category in SIGNAL_CATEGORIES:
         all_templates = []
         
-        # First: Extract templates from articles if available
+        # Extract templates strictly from articles (no synthetic fallbacks)
         if category in categorized_articles and len(categorized_articles[category]) >= 2:
             logger.info(f"  {category}: extracting from articles...")
             article_templates = llm.extract_templates(
                 categorized_articles[category],
                 category,
-                max_templates=templates_per_category
+                max_templates=max(templates_per_category, MIN_ITEMS_PER_CATEGORY)
             )
             all_templates.extend(article_templates)
             logger.info(f"    ✓ Extracted {len(article_templates)} templates from articles")
-        
-        # Second: Always generate generic templates for this category (category-tuned minimum)
-        logger.info(f"  {category}: generating generic templates...")
-        generic_templates = llm.generate_fallback_templates(
-            category,
-            max_templates=fallback_templates_min[category]
-        )
-        all_templates.extend(generic_templates)
-        logger.info(f"    ✓ Generated {len(generic_templates)} generic templates")
+        else:
+            logger.warning(f"  {category}: no articles available to extract templates")
         
         # Deduplicate while preserving order (case-insensitive)
         seen = set()
@@ -689,36 +704,39 @@ def generate_templates_and_keywords(
         
         signal_templates[category] = unique_templates
         logger.info(f"    → Total (after dedup): {len(unique_templates)} templates")
+
+        if len(unique_templates) < MIN_ITEMS_PER_CATEGORY:
+            raise RuntimeError(
+                f"Category {category} has only {len(unique_templates)} templates; need >= {MIN_ITEMS_PER_CATEGORY}."
+            )
     
     # Step 3: Generate keywords for each category
-    logger.info("\nGenerating tag keywords...")
+    logger.info("\nGenerating tag keywords (real articles only)...")
     tag_keywords = {}
     
     for category in SIGNAL_CATEGORIES:
         all_keywords = {}
         
-        # First: Extract keywords from articles if available
+        # Extract keywords strictly from articles (no synthetic fallbacks)
         if category in categorized_articles and len(categorized_articles[category]) >= 2:
             logger.info(f"  {category}: extracting from articles...")
             article_keywords = llm.extract_keywords(
                 categorized_articles[category],
                 category,
-                max_keywords=keywords_per_category
+                max_keywords=max(keywords_per_category, MIN_ITEMS_PER_CATEGORY)
             )
             all_keywords.update(article_keywords)
             logger.info(f"    ✓ Extracted {len(article_keywords)} keywords from articles")
-        
-        # Second: Always generate generic keywords for this category (category-tuned minimum)
-        logger.info(f"  {category}: generating generic keywords...")
-        generic_keywords = llm.generate_fallback_keywords(
-            category,
-            max_keywords=fallback_keywords_min[category]
-        )
-        all_keywords.update(generic_keywords)
-        logger.info(f"    ✓ Generated {len(generic_keywords)} generic keywords")
+        else:
+            logger.warning(f"  {category}: no articles available to extract keywords")
         
         tag_keywords[category] = all_keywords
         logger.info(f"    → Total (after dedup): {len(all_keywords)} keywords")
+
+        if len(all_keywords) < MIN_ITEMS_PER_CATEGORY:
+            raise RuntimeError(
+                f"Category {category} has only {len(all_keywords)} keywords; need >= {MIN_ITEMS_PER_CATEGORY}."
+            )
     
     # Step 4: Save to JSON files
     output_dir.mkdir(parents=True, exist_ok=True)
