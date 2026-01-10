@@ -23,7 +23,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from ml.ingestion.hopsworks_pipeline import SIGNAL_CATEGORIES, TAG_VOCAB
-from backend.server.services.hopsworks import create_hopsworks_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,15 +156,26 @@ def load_hopsworks_training_df(
     limit: Optional[int] = None,
 ) -> pl.DataFrame:
     """Load labeled headlines from Hopsworks feature group and return a polars DataFrame."""
-    service = create_hopsworks_service(
-        enabled=True,
-        api_key=api_key,
-        project_name=project,
-        host=host,
-    )
-    service.connect()
+    import hopsworks
+    
+    logger.info(f"Connecting to Hopsworks project: {project}")
+    
+    # Direct Hopsworks login
+    login_kwargs = {
+        "api_key_value": api_key,
+        "project": project,
+        "engine": "python"
+    }
+    if host:
+        login_kwargs["host"] = host
+    
+    hops_project = hopsworks.login(**login_kwargs)
+    fs = hops_project.get_feature_store()
+    logger.info(f"Connected to feature store: {fs.name}")
 
-    fg = service.get_or_create_headline_feature_group(fg_name, fg_version)
+    # Get feature group
+    fg = fs.get_feature_group(name=fg_name, version=fg_version)
+    
     query = fg.select_all()
     if city:
         query = query.filter(fg.city == city)
@@ -440,16 +450,30 @@ if __name__ == "__main__":
         if not args.hopsworks_api_key:
             parser.error("--hopsworks-api-key is required when --register-to-hopsworks is set")
 
-        service = create_hopsworks_service(
-            enabled=True,
-            api_key=args.hopsworks_api_key,
-            project_name=args.hopsworks_project,
-            host=args.hopsworks_host,
-        )
-        service.register_model(
-            model_dir=args.output,
+        import hopsworks
+        
+        logger.info(f"Registering model to Hopsworks project: {args.hopsworks_project}")
+        
+        # Direct Hopsworks login
+        login_kwargs = {
+            "api_key_value": args.hopsworks_api_key,
+            "project": args.hopsworks_project,
+            "engine": "python"
+        }
+        if args.hopsworks_host:
+            login_kwargs["host"] = args.hopsworks_host
+        
+        hops_project = hopsworks.login(**login_kwargs)
+        mr = hops_project.get_model_registry()
+        
+        # Create model
+        model_metadata = mr.python.create_model(
             name=args.model_name,
+            version=args.model_version,
             metrics={"val_loss": float(best_val_loss)},
             description="Fine-tuned multi-head news classifier",
-            version=args.model_version,
         )
+        
+        # Save model files
+        model_metadata.save(str(best_checkpoint))
+        logger.info(f"✓ Model registered to Hopsworks: {args.model_name}")
