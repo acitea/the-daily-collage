@@ -711,8 +711,8 @@ def fetch_and_label(
             
             # Truncate long string columns to fit Hopsworks limits
             df_upload['title'] = df_upload['title'].str[:500]
-            df_upload['description'] = df_upload['description'].str[:2000]
-            df_upload['url'] = df_upload['url'].str[:1000]
+            df_upload['description'] = df_upload['description'].str[:100]
+            df_upload['url'] = df_upload['url'].str[:100]
             df_upload['source'] = df_upload['source'].str[:200]
             
             # Truncate tag columns
