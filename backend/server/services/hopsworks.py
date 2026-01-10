@@ -52,7 +52,7 @@ class HopsworksService:
     def connect(self):
         """Establish connection to Hopsworks."""
         try:
-            import hopsworks
+            import hsfs
             
             connection_args = {
                 "project": self.project_name,
@@ -60,21 +60,31 @@ class HopsworksService:
             }
             
             if self.host:
-                # Parse host to extract region if it contains "c.app.hopsworks.ai"
-                if "c.app.hopsworks.ai" in self.host or "cloud.hopsworks.ai" in self.host:
-                    # Extract region from host (e.g., "c.app.hopsworks.ai" or specific region)
-                    connection_args["host"] = "c.app.hopsworks.ai"
-                else:
-                    connection_args["host"] = self.host
+                # Use the host as provided
+                connection_args["host"] = self.host
+            else:
+                # Default to Hopsworks managed cloud
+                connection_args["host"] = "c.app.hopsworks.ai"
                     
-            self._project = hopsworks.login(**connection_args)
-            self._fs = self._project.get_feature_store()
-            self._mr = self._project.get_model_registry()
+            connection = hsfs.connection(**connection_args)
+            self._fs = connection.get_feature_store()
+            
+            # Try to get model registry (requires separate import)
+            try:
+                import hsml
+                self._mr = connection.get_model_registry()
+            except ImportError:
+                logger.warning("hsml package not installed. Model registry features unavailable.")
+                self._mr = None
+            except Exception as e:
+                logger.warning(f"Could not access model registry: {e}")
+                self._mr = None
             
             logger.info(f"Connected to Hopsworks project: {self.project_name}")
             
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
+            logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
             raise
             
     def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
@@ -214,8 +224,8 @@ class HopsworksService:
         Feature group for storing signal templates.
 
         Schema:
-        - category: string
-        - template: string
+        - category: string(100)
+        - template: string(1000)
         - created_at: timestamp
         """
         if not self._fs:
@@ -232,13 +242,23 @@ class HopsworksService:
             logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
 
         try:
+            # Import pandas for schema definition
+            import pandas as pd
+            
+            # Create empty DataFrame with proper types to define schema
+            schema_df = pd.DataFrame({
+                'category': pd.Series(dtype='string'),
+                'template': pd.Series(dtype='string'),
+                'created_at': pd.Series(dtype='datetime64[ns]')
+            })
+            
             fg = self._fs.create_feature_group(
                 name=fg_name,
                 version=version,
                 description="Signal templates per category",
-                primary_key=["category", "template"],
+                primary_key=["category"],
                 event_time="created_at",
-                online_enabled=True,
+                online_enabled=False,
             )
             logger.info(f"Created feature group: {fg_name} v{version}")
             return fg
@@ -251,9 +271,9 @@ class HopsworksService:
         Feature group for storing tag keywords.
 
         Schema:
-        - category: string
-        - keyword: string
-        - tag: string
+        - category: string(100)
+        - keyword: string(200)
+        - tag: string(100)
         - created_at: timestamp
         """
         if not self._fs:
@@ -270,13 +290,24 @@ class HopsworksService:
             logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
 
         try:
+            # Import pandas for schema definition
+            import pandas as pd
+            
+            # Create empty DataFrame with proper types to define schema
+            schema_df = pd.DataFrame({
+                'category': pd.Series(dtype='string'),
+                'keyword': pd.Series(dtype='string'),
+                'tag': pd.Series(dtype='string'),
+                'created_at': pd.Series(dtype='datetime64[ns]')
+            })
+            
             fg = self._fs.create_feature_group(
                 name=fg_name,
                 version=version,
                 description="Tag keywords per category",
                 primary_key=["category", "keyword"],
                 event_time="created_at",
-                online_enabled=True,
+                online_enabled=False,
             )
             logger.info(f"Created feature group: {fg_name} v{version}")
             return fg
