@@ -186,9 +186,39 @@ def load_hopsworks_training_df(
     if df_pd is None or df_pd.empty:
         raise ValueError("No labeled rows returned from Hopsworks feature group")
 
+    # Convert to polars
     df = pl.from_pandas(df_pd)
     
+    # Log available columns for debugging
+    logger.info(f"Available columns: {df.columns}")
+    
+    # Handle column name prefixes (Hopsworks sometimes adds prefixes)
+    # Rename columns if they have prefixes like "read.parquet_" or feature group name prefix
+    column_mapping = {}
+    for col in df.columns:
+        # Remove common prefixes
+        clean_name = col
+        if "." in col:
+            clean_name = col.split(".")[-1]  # Take last part after dot
+        if clean_name.startswith("parquet_"):
+            clean_name = clean_name.replace("parquet_", "")
+        if clean_name != col:
+            column_mapping[col] = clean_name
+    
+    if column_mapping:
+        logger.info(f"Renaming columns: {column_mapping}")
+        df = df.rename(column_mapping)
+    
     # Ensure all expected columns are present and handle nulls
+    expected_cols = ["title", "description", "tone", "url", "source"]
+    for col_name in expected_cols:
+        if col_name not in df.columns:
+            logger.warning(f"Column '{col_name}' not found, adding empty column")
+            if col_name == "tone":
+                df = df.with_columns(pl.lit(0.0).alias(col_name))
+            else:
+                df = df.with_columns(pl.lit("").alias(col_name))
+    
     df = df.with_columns([
         pl.col("title").fill_null("").alias("title"),
         pl.col("description").fill_null("").alias("description"),
@@ -199,10 +229,20 @@ def load_hopsworks_training_df(
     
     # Fill null scores and tags for all categories
     for category in SIGNAL_CATEGORIES:
-        if f"{category}_score" in df.columns:
-            df = df.with_columns(pl.col(f"{category}_score").fill_null(0.0))
-        if f"{category}_tag" in df.columns:
-            df = df.with_columns(pl.col(f"{category}_tag").fill_null(""))
+        score_col = f"{category}_score"
+        tag_col = f"{category}_tag"
+        
+        if score_col not in df.columns:
+            logger.warning(f"Column '{score_col}' not found, adding zero column")
+            df = df.with_columns(pl.lit(0.0).alias(score_col))
+        else:
+            df = df.with_columns(pl.col(score_col).fill_null(0.0))
+            
+        if tag_col not in df.columns:
+            logger.warning(f"Column '{tag_col}' not found, adding empty column")
+            df = df.with_columns(pl.lit("").alias(tag_col))
+        else:
+            df = df.with_columns(pl.col(tag_col).fill_null(""))
     
     df = _filter_labeled_rows(df)
 
