@@ -56,19 +56,17 @@ class HopsworksService:
             
             logger.info(f"Connecting to Hopsworks project: {self.project_name}")
             
-            # Build connection arguments - let hsfs auto-detect host and engine for managed cloud
-            connection_kwargs = {
-                "project": self.project_name,
-                "api_key_value": self.api_key,
-            }
+            # Host is required by hsfs - default to managed cloud
+            host = self.host if self.host else "c.app.hopsworks.ai"
             
-            # Only specify host if explicitly provided (for on-premise installations)
-            if self.host:
-                connection_kwargs["host"] = self.host
-                logger.info(f"Using custom host: {self.host}")
+            logger.info(f"Using host: {host}")
             
-            # Create connection
-            connection = hsfs.connection(**connection_kwargs)
+            # Create connection with required parameters
+            connection = hsfs.connection(
+                host=host,
+                project=self.project_name,
+                api_key_value=self.api_key,
+            )
             
             # Get feature store
             self._fs = connection.get_feature_store()
@@ -91,8 +89,7 @@ class HopsworksService:
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
             logger.error(f"Project: {self.project_name}")
-            if self.host:
-                logger.error(f"Host: {self.host}")
+            logger.error(f"Host: {self.host or 'c.app.hopsworks.ai (default)'}")
             logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
             logger.error("For managed Hopsworks, ensure your API key is valid and the project exists")
             raise
