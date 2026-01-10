@@ -175,11 +175,19 @@ def load_hopsworks_training_df(
 
     # Get feature group
     logger.info(f"Fetching feature group: {fg_name} v{fg_version}")
-    fg = fs.get_feature_group(name=fg_name, version=fg_version)
-    logger.info(f"Feature group schema: {fg.schema}")
+    try:
+        fg = fs.get_feature_group(name=fg_name, version=fg_version)
+        logger.info(f"Feature group fetched successfully")
+        
+        # Read data without accessing schema (which can trigger query building)
+        # Use read with no filters to get all data
+        df_pd = fg.read()
+        logger.info(f"Successfully read {len(df_pd) if df_pd is not None else 0} rows from feature group")
+        
+    except Exception as e:
+        logger.error(f"Error reading feature group with fg.read(): {e}")
+        raise ValueError(f"Failed to read feature group '{fg_name}': {str(e)}")
     
-    # Read data directly from feature group
-    df_pd = fg.read()
     if df_pd is None or df_pd.empty:
         raise ValueError("No labeled rows returned from Hopsworks feature group")
 
@@ -190,20 +198,31 @@ def load_hopsworks_training_df(
     logger.info(f"Available columns: {df.columns}")
     
     # Handle column name prefixes (Hopsworks sometimes adds prefixes)
-    # Rename columns if they have prefixes like "read.parquet_" or feature group name prefix
+    # e.g., "read.parquet_headline_labels_title" -> "title"
     column_mapping = {}
     for col in df.columns:
-        # Remove common prefixes
         clean_name = col
+        
+        # Remove feature group prefix and parquet prefix
+        # Pattern: "read.parquet_<fg_name>_<actual_col>" or similar
         if "." in col:
-            clean_name = col.split(".")[-1]  # Take last part after dot
+            # Take last part after dot
+            clean_name = col.split(".")[-1]
+        
+        # Remove "parquet_" prefix if present
         if clean_name.startswith("parquet_"):
-            clean_name = clean_name.replace("parquet_", "")
+            clean_name = clean_name.replace("parquet_", "", 1)
+        
+        # Remove feature group name prefix if present
+        if fg_name and clean_name.startswith(fg_name + "_"):
+            clean_name = clean_name.replace(fg_name + "_", "", 1)
+        
         if clean_name != col:
             column_mapping[col] = clean_name
+            logger.info(f"  Mapping: {col} -> {clean_name}")
     
     if column_mapping:
-        logger.info(f"Renaming columns: {column_mapping}")
+        logger.info(f"Renaming {len(column_mapping)} columns")
         df = df.rename(column_mapping)
     
     # Ensure all expected columns are present and handle nulls
