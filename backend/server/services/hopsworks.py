@@ -57,20 +57,25 @@ class HopsworksService:
             # Build connection arguments
             host = self.host if self.host else "c.app.hopsworks.ai"
             
-            # Use the connection method with proper parameters
+            logger.info(f"Connecting to Hopsworks: host={host}, project={self.project_name}")
+            
+            # Use the connection method with proper parameters and Python engine
             connection = hsfs.connection(
                 host=host,
                 project=self.project_name,
                 api_key_value=self.api_key,
+                engine="python",  # Use Python engine for managed Hopsworks
             )
             
             # Get feature store (name parameter is optional, defaults to project name + "_featurestore")
             self._fs = connection.get_feature_store()
+            logger.info(f"Connected to feature store: {self._fs.name}")
             
             # Try to get model registry (requires separate import)
             try:
                 import hsml
                 self._mr = connection.get_model_registry()
+                logger.info("Model registry connected")
             except ImportError:
                 logger.warning("hsml package not installed. Model registry features unavailable.")
                 self._mr = None
@@ -78,12 +83,13 @@ class HopsworksService:
                 logger.warning(f"Could not access model registry: {e}")
                 self._mr = None
             
-            logger.info(f"Connected to Hopsworks project: {self.project_name}")
+            logger.info(f"Successfully connected to Hopsworks project: {self.project_name}")
             
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
             logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
             logger.error(f"Connection details: host={self.host or 'c.app.hopsworks.ai'}, project={self.project_name}")
+            logger.error("For managed Hopsworks, ensure your API key is valid and the project exists")
             raise
             
     def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
