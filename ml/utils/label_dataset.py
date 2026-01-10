@@ -698,7 +698,8 @@ def fetch_and_label(
             logger.info(f"Connecting to Hopsworks project: {hopsworks_project}")
             project = hopsworks.login(
                 api_key_value=hopsworks_api_key,
-                project=hopsworks_project
+                project=hopsworks_project,
+                engine="python"
             )
             
             # Get feature store
