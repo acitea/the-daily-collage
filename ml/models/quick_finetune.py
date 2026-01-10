@@ -173,23 +173,47 @@ def load_hopsworks_training_df(
     fs = hops_project.get_feature_store()
     logger.info(f"Connected to feature store: {fs.name}")
 
-    # Get feature group
+    # Get feature group and create/use a feature view to stabilize column projection
     logger.info(f"Fetching feature group: {fg_name} v{fg_version}")
     try:
         fg = fs.get_feature_group(name=fg_name, version=fg_version)
-        logger.info(f"Feature group fetched successfully")
-        
-        # Read data without accessing schema (which can trigger query building)
-        # Use read with no filters to get all data
-        df_pd = fg.read()
-        logger.info(f"Successfully read {len(df_pd) if df_pd is not None else 0} rows from feature group")
-        
+        logger.info("Feature group fetched successfully")
+
+        # Columns expected from label_dataset.py
+        base_cols = ["title", "description", "tone", "url", "source", "date"]
+        score_cols = [f"{c}_score" for c in SIGNAL_CATEGORIES]
+        tag_cols = [f"{c}_tag" for c in SIGNAL_CATEGORIES]
+        all_cols = base_cols + score_cols + tag_cols
+
+        fv_name = f"{fg_name}_view"
+        logger.info(f"Ensuring feature view: {fv_name} v{fg_version}")
+        fv = fs.get_or_create_feature_view(
+            name=fv_name,
+            version=fg_version,
+            description=f"View over {fg_name} for training",
+            query=fg.select(all_cols),
+            labels=[],
+        )
+
+        # Read via feature view to avoid binder errors
+        logger.info("Reading feature view with use_hive=False …")
+        df_pd = fv.get_batch_data(read_options={"use_hive": False})
+        logger.info(f"Feature view read returned {len(df_pd) if df_pd is not None else 0} rows")
+
+        # Fallback: direct FG read if feature view is empty
+        if df_pd is None or (hasattr(df_pd, '__len__') and len(df_pd) == 0):
+            logger.warning("Feature view returned no rows; falling back to feature group read")
+            df_pd = fg.read(read_options={"use_hive": False})
+            if df_pd is None or (hasattr(df_pd, '__len__') and len(df_pd) == 0):
+                logger.warning("FG read empty; retrying select_all().read(use_hive=False)")
+                df_pd = fg.select_all().read(read_options={"use_hive": False})
+
     except Exception as e:
-        logger.error(f"Error reading feature group with fg.read(): {e}")
-        raise ValueError(f"Failed to read feature group '{fg_name}': {str(e)}")
-    
+        logger.error(f"Error reading feature view/group: {e}")
+        raise ValueError(f"Failed to read feature group/view '{fg_name}': {str(e)}")
+
     if df_pd is None or df_pd.empty:
-        raise ValueError("No labeled rows returned from Hopsworks feature group")
+        raise ValueError("No labeled rows returned from Hopsworks feature group or feature view")
 
     # Convert to polars
     df = pl.from_pandas(df_pd)
