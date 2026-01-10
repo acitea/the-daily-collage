@@ -706,31 +706,21 @@ def fetch_and_label(
             fs = project.get_feature_store()
             logger.info(f"Connected to feature store: {fs.name}")
             
-            # Get or create feature group
-            try:
-                fg = fs.get_feature_group(name=labels_fg, version=1)
-                logger.info(f"Using existing feature group: {labels_fg} v1")
-            except Exception as e:
-                logger.warning(f"Feature group {labels_fg} not found: {e}")
-                logger.info(f"Creating new feature group: {labels_fg} v1")
-                
-                # Convert to pandas first to infer schema
-                df_upload = pd.DataFrame(labeled_rows)
-                
-                # Create feature group with explicit schema from dataframe
-                fg = fs.create_feature_group(
-                    name=labels_fg,
-                    version=1,
-                    description="Labeled dataset rows with scores/tags per category",
-                    primary_key=["url"],
-                    event_time="date",
-                    online_enabled=False,
-                )
-                logger.info(f"Created feature group: {labels_fg} v1")
+            # Convert to pandas first
+            df_upload = pd.DataFrame(labeled_rows)
+            
+            # Get or create feature group (this method handles Python-only mode better)
+            fg = fs.get_or_create_feature_group(
+                name=labels_fg,
+                version=1,
+                description="Labeled dataset rows with scores/tags per category",
+                primary_key=["url"],
+                event_time="date",
+                online_enabled=False,
+            )
+            logger.info(f"Using feature group: {labels_fg} v1")
             
             # Insert data
-            if 'df_upload' not in locals():
-                df_upload = pd.DataFrame(labeled_rows)
             fg.insert(df_upload)
             print(f"✓ Uploaded labeled dataset ({len(labeled_rows)} rows) to Hopsworks FG '{labels_fg}'")
             
