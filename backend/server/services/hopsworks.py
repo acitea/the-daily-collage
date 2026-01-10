@@ -220,6 +220,9 @@ class HopsworksService:
         """
         if not self._fs:
             self.connect()
+        
+        if not self._fs:
+            raise RuntimeError("Failed to connect to Hopsworks feature store")
 
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
@@ -255,6 +258,9 @@ class HopsworksService:
         """
         if not self._fs:
             self.connect()
+        
+        if not self._fs:
+            raise RuntimeError("Failed to connect to Hopsworks feature store")
 
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
@@ -284,6 +290,9 @@ class HopsworksService:
             self.connect()
 
         fg = self.get_or_create_templates_feature_group(fg_name, version)
+        if fg is None:
+            raise RuntimeError(f"Failed to get or create feature group: {fg_name}")
+        
         rows = []
         now = datetime.utcnow()
         for category, tmpl_list in templates.items():
@@ -308,6 +317,9 @@ class HopsworksService:
             self.connect()
 
         fg = self.get_or_create_keywords_feature_group(fg_name, version)
+        if fg is None:
+            raise RuntimeError(f"Failed to get or create feature group: {fg_name}")
+        
         rows = []
         now = datetime.utcnow()
         for category, kv in keywords.items():
@@ -695,12 +707,41 @@ class MockHopsworksService:
         """Mock vibe feature group getter."""
         logger.info(f"Mock: Using vibe feature group {fg_name} v{version}")
         return None
+    
+    def get_or_create_templates_feature_group(self, fg_name: str = "signal_templates", version: int = 1):
+        """Mock templates feature group getter."""
+        logger.info(f"Mock: Using templates feature group {fg_name} v{version}")
+        return self
+    
+    def get_or_create_keywords_feature_group(self, fg_name: str = "tag_keywords", version: int = 1):
+        """Mock keywords feature group getter."""
+        logger.info(f"Mock: Using keywords feature group {fg_name} v{version}")
+        return self
+    
+    def get_or_create_headline_labels_feature_group(self, fg_name: str = "headline_labels", version: int = 1):
+        """Mock headline labels feature group getter."""
+        logger.info(f"Mock: Using headline labels feature group {fg_name} v{version}")
+        return self
         
     def store_headline_classifications(self, headlines: List[Dict], city: str, timestamp: datetime, **kwargs):
         """Mock headline storage."""
         key = f"{city}_{timestamp.isoformat()}"
         self.headlines[key] = headlines
         logger.info(f"Mock: Stored {len(headlines)} headline classifications for {city}")
+    
+    def store_signal_templates(self, templates: Dict[str, List[str]], **kwargs):
+        """Mock signal templates storage."""
+        total = sum(len(t) for t in templates.values())
+        logger.info(f"Mock: Stored {total} signal templates")
+    
+    def store_tag_keywords(self, keywords: Dict[str, Dict[str, str]], **kwargs):
+        """Mock tag keywords storage."""
+        total = sum(len(k) for k in keywords.values())
+        logger.info(f"Mock: Stored {total} tag keywords")
+    
+    def store_labeled_dataset(self, df, **kwargs):
+        """Mock labeled dataset storage."""
+        logger.info(f"Mock: Stored {len(df)} labeled headlines")
         
     def store_vibe_vector(self, city: str, timestamp: datetime, vibe_vector: Dict, **kwargs):
         """Mock vibe vector storage."""
@@ -725,6 +766,11 @@ class MockHopsworksService:
     def get_visualization(self, vibe_hash: str) -> Optional[Tuple[bytes, Dict]]:
         """Mock visualization retrieval."""
         return self.storage.get(vibe_hash)
+    
+    def insert(self, df):
+        """Mock insert method (for when mock is returned as feature group)."""
+        logger.info(f"Mock: Inserted {len(df)} rows")
+        return None
         
     def visualization_exists(self, vibe_hash: str) -> bool:
         """Mock visualization existence check."""
