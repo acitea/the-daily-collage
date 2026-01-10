@@ -693,6 +693,7 @@ def fetch_and_label(
         try:
             import hopsworks
             import pandas as pd
+            from hsfs.feature import Feature
             
             # Connect to Hopsworks project
             logger.info(f"Connecting to Hopsworks project: {hopsworks_project}")
@@ -709,7 +710,22 @@ def fetch_and_label(
             # Convert to pandas first
             df_upload = pd.DataFrame(labeled_rows)
             
-            # Get or create feature group (this method handles Python-only mode better)
+            # Define features with explicit string lengths for long columns
+            features = [
+                Feature(name="title", type="string(500)"),
+                Feature(name="description", type="string(2000)"),
+                Feature(name="tone", type="float"),
+                Feature(name="url", type="string(1000)"),
+                Feature(name="source", type="string(200)"),
+                Feature(name="date", type="string(50)"),
+            ]
+            
+            # Add signal score and tag features for each category
+            for category in SIGNAL_CATEGORIES:
+                features.append(Feature(name=f"{category}_score", type="float"))
+                features.append(Feature(name=f"{category}_tag", type="string(100)"))
+            
+            # Get or create feature group with explicit schema
             fg = fs.get_or_create_feature_group(
                 name=labels_fg,
                 version=1,
@@ -717,6 +733,7 @@ def fetch_and_label(
                 primary_key=["url"],
                 event_time="date",
                 online_enabled=False,
+                features=features,
             )
             logger.info(f"Using feature group: {labels_fg} v1")
             
