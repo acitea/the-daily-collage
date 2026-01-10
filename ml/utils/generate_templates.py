@@ -55,15 +55,56 @@ SIGNAL_CATEGORIES = [
 
 # Category-specific keywords for GDELT queries (Swedish)
 CATEGORY_KEYWORDS = {
-    "emergencies": ["brand", "explosion", "räddning", "olycka", "katastrof", "evakuering", "larm", "nödläge"],
-    "crime": ["brott", "polis", "misstänkt", "åtal", "rån", "mord", "skottlossning", "gripna"],
-    "festivals": ["festival", "konsert", "evenemang", "firande", "kulturvecka", "musikfestival", "teater"],
-    "transportation": ["trafik", "kollektivtrafik", "tåg", "buss", "förseningar", "inställt", "väg", "trafikstörning"],
-    "weather_temp": ["temperatur", "värmebölja", "kyla", "vädret", "SMHI", "vädervarning", "grader"],
-    "weather_wet": ["regn", "snö", "översvämning", "storm", "blåst", "skyfall", "halka"],
-    "sports": ["sport", "fotboll", "ishockey", "seger", "matcher", "VM", "EM", "allsvenskan"],
-    "economics": ["ekonomi", "börs", "aktier", "inflation", "ränta", "finans", "arbetsmarknad", "löner"],
-    "politics": ["regering", "riksdag", "politik", "val", "minister", "parti", "opposition", "lagförslag"]
+    "emergencies": [
+        "brand", "explosion", "räddning", "olycka", "katastrof", "evakuering", "larm", "nödläge",
+        "jordbävning", "skogsbrand", "storbrand", "evakueras"
+    ],
+    "crime": [
+        "brott", "polis", "misstänkt", "åtal", "rån", "mord", "skottlossning", "gripna",
+        "rånförsök", "överfall", "bedrägeri"
+    ],
+    "festivals": ["festival", "konsert", "evenemang", "firande", "kulturvecka", "musikfestival", "teater", "kulturkalas"],
+    "transportation": [
+        "trafik", "kollektivtrafik", "tåg", "buss", "förseningar", "inställt", "väg", "trafikstörning",
+        "trafikolycka", "bilolycka", "kö", "trafikkaos", "tunnelbana", "pendeltåg", "spårfel", "vägstängd", "färja", "brostängning"
+    ],
+    "weather_temp": [
+        "temperatur", "värmebölja", "kyla", "vädret", "smhi", "vädervarning", "grader",
+        "värme", "hetta", "kallfront", "köldknäpp", "frost", "minusgrader", "plusgrader", "värmerekord", "köldrekord"
+    ],
+    "weather_wet": [
+        "regn", "snö", "översvämning", "storm", "blåst", "skyfall", "halka",
+        "regnoväder", "snöfall", "snökaos", "slask", "stormvindar", "orkan", "blixt", "hagel", "vädervarning"
+    ],
+    "sports": [
+        "sport", "fotboll", "ishockey", "seger", "matcher", "vm", "em", "allsvenskan",
+        "derby", "guld", "silver", "brons", "turnering", "cupen", "landslaget", "mål", "förlust", "poäng"
+    ],
+    "economics": [
+        "ekonomi", "börs", "aktier", "inflation", "ränta", "finans", "arbetsmarknad", "löner",
+        "bnp", "tillväxt", "budget", "underskott", "nedskärningar", "krona", "växelkurs", "arbetslöshet", "konkurs"
+    ],
+    "politics": ["regering", "riksdag", "politik", "val", "minister", "parti", "opposition", "lagförslag", "protest", "demonstration"]
+}
+
+# Expansions for short/ambiguous keywords to avoid GDELT "phrase too short" errors
+SHORT_KEYWORD_EXPANSIONS = {
+    "sports": {
+        "vm": ["vm fotboll", "vm ishockey"],
+        "em": ["em fotboll"],
+    },
+    "transportation": {
+        "väg": ["vägstängd", "väg avstängd"],
+        "kö": ["kö trafik", "trafikkö"],
+    },
+    "weather_wet": {
+        "snö": ["snöoväder", "snöfall"],
+        "regn": ["kraftigt regn"],
+    },
+    "weather_temp": {
+        "värme": ["värmebölja"],
+        "kyla": ["sträng kyla"],
+    },
 }
 
 
@@ -475,15 +516,36 @@ def fetch_articles_for_category(
         logger.warning(f"No keywords defined for category: {category}")
         return []
     
-    logger.info(f"Fetching articles for {category} with keywords: {keywords[:3]}...")
+    # Build query terms; expand too-short keywords to avoid GDELT "phrase too short" errors
+    query_terms = []
+    expansions = SHORT_KEYWORD_EXPANSIONS.get(category, {})
+    for kw in keywords:
+        extra = expansions.get(kw)
+        if extra:
+            query_terms.extend(extra)
+        elif len(kw) < 3:
+            logger.debug(f"Skipping too-short keyword '{kw}' for {category}; no expansion found")
+            continue
+        else:
+            query_terms.append(kw)
+
+    if not query_terms:
+        query_terms = keywords  # fallback to original list if everything was skipped
+
+    logger.info(f"Fetching articles for {category} with keywords: {query_terms[:3]}...")
     
     all_articles = []
     seen_urls = set()
     
     # Split into multiple batches with different keywords to get variety
-    articles_per_keyword = max(50, num_articles // len(keywords))
-    
-    for keyword in keywords[:4]:  # Use top 4 keywords to avoid too many API calls
+    articles_per_keyword = max(40, num_articles // max(4, len(query_terms)))
+
+    # Use more keywords for sparse categories to improve recall
+    max_kw = 4
+    if category in {"transportation", "weather_temp", "weather_wet", "sports", "economics"}:
+        max_kw = min(len(query_terms), 8)
+
+    for keyword in query_terms[:max_kw]:
         try:
             gd = GdeltDoc()
             filters = Filters(
@@ -546,6 +608,15 @@ def generate_templates_and_keywords(
     # Initialize LLM
     llm = TemplateLLM(model_name=llm_model_name)
     
+    # Per-category fallback targets for sparse signals
+    sparse_categories = {"transportation", "weather_temp", "weather_wet", "sports", "economics"}
+    fallback_templates_min = {
+        cat: 30 if cat in sparse_categories else 20 for cat in SIGNAL_CATEGORIES
+    }
+    fallback_keywords_min = {
+        cat: 30 if cat in sparse_categories else 20 for cat in SIGNAL_CATEGORIES
+    }
+
     # Step 1: Fetch articles per category
     logger.info(f"Fetching {articles_per_category} articles per category from GDELT (country={country}, lookback={days_lookback} days)...")
     categorized_articles = {}
@@ -598,11 +669,11 @@ def generate_templates_and_keywords(
             all_templates.extend(article_templates)
             logger.info(f"    ✓ Extracted {len(article_templates)} templates from articles")
         
-        # Second: Always generate generic templates for this category (minimum 20)
+        # Second: Always generate generic templates for this category (category-tuned minimum)
         logger.info(f"  {category}: generating generic templates...")
         generic_templates = llm.generate_fallback_templates(
             category,
-            max_templates=20  # Always generate at least 20 generic templates
+            max_templates=fallback_templates_min[category]
         )
         all_templates.extend(generic_templates)
         logger.info(f"    ✓ Generated {len(generic_templates)} generic templates")
@@ -637,11 +708,11 @@ def generate_templates_and_keywords(
             all_keywords.update(article_keywords)
             logger.info(f"    ✓ Extracted {len(article_keywords)} keywords from articles")
         
-        # Second: Always generate generic keywords for this category (minimum 20)
+        # Second: Always generate generic keywords for this category (category-tuned minimum)
         logger.info(f"  {category}: generating generic keywords...")
         generic_keywords = llm.generate_fallback_keywords(
             category,
-            max_keywords=20  # Always generate at least 20 generic keywords
+            max_keywords=fallback_keywords_min[category]
         )
         all_keywords.update(generic_keywords)
         logger.info(f"    ✓ Generated {len(generic_keywords)} generic keywords")
