@@ -84,6 +84,8 @@ jobs:
               end_hour = start_hour + 6
               date = now.strftime('%Y-%m-%d')
               window = f"{start_hour:02d}-{end_hour:02d}"
+
+          # Write to GITHUB_OUTPUT
           with open(os.environ['GITHUB_OUTPUT'], "a", encoding="utf-8") as fh:
               fh.write(f"date={date}\n")
               fh.write(f"window={window}\n")
@@ -94,6 +96,10 @@ jobs:
   classify-aggregate:
     runs-on: ubuntu-latest
     needs: fetch-headlines
+    outputs:
+      # Map step outputs to job outputs
+      date: ${{ needs.fetch-headlines.outputs.date }}
+      window: ${{ needs.fetch-headlines.outputs.window }}
     env:
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
@@ -153,5 +159,5 @@ jobs:
         run: |
           uv run jobs/generate_visualization.py \
             --city "${{ env.CITY }}" \
-            --date "${{ needs.fetch-headlines.outputs.date }}" \
-            --window "${{ needs.fetch-headlines.outputs.window }}"
+            --date "${{ needs.classify-aggregate.outputs.date }}" \
+            --window "${{ needs.classify-aggregate.outputs.window }}"
