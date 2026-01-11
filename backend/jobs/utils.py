@@ -49,78 +49,32 @@ def make_article_id(url: str, title: str) -> str:
     seed = (url or "") + "|" + (title or "")
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
 
-def aggregate_vibe_vector(
-    articles_df: pl.DataFrame,
-) -> Dict[str, Tuple[float, str, int]]:
-    """
-    Aggregate article classifications into a single vibe vector using weighted aggregation.
-    
-    Instead of max-pooling, this uses a weighted approach where:
-    - More articles of a category increase the intensity
-    - Higher individual scores boost the aggregated score
-    - Formula: weighted_score = (sum of scores * frequency_weight) / num_articles
-    
-    This ensures that:
-    - Many low-intensity signals accumulate to medium intensity
-    - Many medium-intensity signals accumulate to high intensity
-    - The most common tag is selected
-    
-    Args:
-        articles_df: DataFrame with title and description columns
-        
-    Returns:
-        Dict mapping category to (aggregated_score, dominant_tag, count)
-    """
-    # Classify all articles
-    all_signals: Dict[str, List[Tuple[float, str]]] = {cat: [] for cat in SIGNAL_CATEGORIES}
-    
-    for row in articles_df.iter_rows(named=True):
-        title = row.get("title", "")
-        description = row.get("description", "")
-        
-        article_signals = classify_article(title, description)
-        
-        for category, (score, tag) in article_signals.items():
-            all_signals[category].append((score, tag))
-    
-    # Aggregate with weighted scoring
-    vibe_vector = {}
-    
-    for category in SIGNAL_CATEGORIES:
-        if not all_signals[category]:
-            continue
-            
-        signals = all_signals[category]
-        count = len(signals)
-        
-        # Calculate base score (average of individual scores)
-        scores = [s[0] for s in signals]
-        base_score = sum(scores) / len(scores)
-        
-        # Apply frequency multiplier
-        # More articles = higher multiplier (caps at 2.0x)
-        # Formula: 1 + log10(count) / 2
-        # Examples: 1 article = 1.0x, 5 articles = 1.35x, 10 articles = 1.5x, 50 articles = 1.85x
-        import math
-        frequency_multiplier = min(1.0 + math.log10(count) / 2, 2.0)
-        
-        # Calculate final weighted score
-        weighted_score = min(base_score * frequency_multiplier, 1.0)
-        
-        # Find dominant tag (most common)
-        tags = [s[1] for s in signals]
-        tag_counts = {}
-        for tag in tags:
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        dominant_tag = max(tag_counts.items(), key=lambda x: x[1])[0]
-        
-        # Only include if weighted score > 0.1 (filter noise)
-        if weighted_score > 0.1:
-            vibe_vector[category] = (weighted_score, dominant_tag, count)
-            
-            logger.debug(
-                f"{category}: base={base_score:.2f}, count={count}, "
-                f"multiplier={frequency_multiplier:.2f}, weighted={weighted_score:.2f}, tag={dominant_tag}"
-            )
-    
-    return vibe_vector
+
+def parse_window_str(window: str) -> tuple[int, int]:
+    """Parse a window string like '00-06' into (start_hour, end_hour)."""
+    try:
+        parts = window.split("-")
+        if len(parts) != 2:
+            raise ValueError
+        start = int(parts[0])
+        end = int(parts[1])
+        if start % VibeHash.WINDOW_DURATION_HOURS != 0 or end - start != VibeHash.WINDOW_DURATION_HOURS:
+            raise ValueError
+        if not (0 <= start < 24 and 0 < end <= 24):
+            raise ValueError
+        return start, end
+    except Exception as exc:
+        raise ValueError("Window must be in 'HH-HH' 6-hour format, e.g., '00-06'.") from exc
+
+
+def build_window_datetimes(date_str: str, window_str: str) -> tuple[datetime, datetime]:
+    """Construct start and end datetimes (UTC) from date and window strings."""
+    try:
+        from datetime import date as _date
+        d = datetime.fromisoformat(f"{date_str}T00:00:00").date()
+    except Exception as exc:
+        raise ValueError("Date must be in 'YYYY-MM-DD' format.") from exc
+    start_hour, end_hour = parse_window_str(window_str)
+    start = datetime(d.year, d.month, d.day, start_hour)
+    end = datetime(d.year, d.month, d.day, end_hour)
+    return start, end

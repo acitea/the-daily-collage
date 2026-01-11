@@ -458,7 +458,8 @@ class HopsworksService:
             row = {
                 "article_id": headline["article_id"],
                 "city": city,
-                "timestamp": timestamp,
+                # Store publication time if available; fallback to provided timestamp
+                "timestamp": headline.get("published_at", timestamp),
                 "title": headline.get("title", ""),
                 "description": headline.get("description", ""),
                 "url": headline.get("url", ""),

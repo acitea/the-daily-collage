@@ -4,10 +4,27 @@ on:
   schedule:
     - cron: "20 */6 * * *" # GDELT updates every 15 minutes, so run at 20 past every 6th hour
   workflow_dispatch:
+    inputs:
+      country:
+        description: "Country name or FIPS code (e.g., 'sweden', 'us')"
+        required: false
+        default: "sweden"
+      city:
+        description: "City/region label for storage"
+        required: false
+        default: "stockholm"
+      date:
+        description: "Date (UTC) in YYYY-MM-DD"
+        required: false
+        default: ""
+      window:
+        description: "6h window (UTC) in 'HH-HH' format (00-06, 06-12, 12-18, 18-24)"
+        required: false
+        default: ""
 
 env:
-  COUNTRY: sweden
-  CITY: stockholm
+  COUNTRY: ${{ github.event.inputs.country || 'sweden' }}
+  CITY: ${{ github.event.inputs.city || 'stockholm' }}
   CLASSIFIER_ENDPOINT: https://terahidro2003--daily-collage-classifier-api-predict.modal.run
 
 defaults:
@@ -39,19 +56,30 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: uv sync --frozen
-      - name: Compute window start
+      - name: Compute date & window
         id: window
         run: |
           uv run python - <<'PY'
           from datetime import datetime
-          now = datetime.utcnow()
-          start_hour = (now.hour // 6) * 6
-          window = datetime(now.year, now.month, now.day, start_hour)
+          import os
+          # If inputs provided, use them; else compute current 6h bucket
+          in_date = os.environ.get('INPUT_DATE') or ''
+          in_window = os.environ.get('INPUT_WINDOW') or ''
+          if in_date and in_window:
+              date = in_date
+              window = in_window
+          else:
+              now = datetime.utcnow()
+              start_hour = (now.hour // 6) * 6
+              end_hour = start_hour + 6
+              date = now.strftime('%Y-%m-%d')
+              window = f"{start_hour:02d}-{end_hour:02d}"
           with open("$GITHUB_OUTPUT", "a", encoding="utf-8") as fh:
-              fh.write(f"window_start={window.isoformat()}\n")
+              fh.write(f"date={date}\n")
+              fh.write(f"window={window}\n")
           PY
       - name: Fetch headlines
-        run: uv run jobs/fetch_headlines.py --country "$COUNTRY" --city "$CITY" --window-start "${{ steps.window.outputs.window_start }}"
+        run: uv run jobs/fetch_headlines.py --country "${{ env.COUNTRY }}" --city "${{ env.CITY }}" --date "${{ steps.window.outputs.date }}" --window "${{ steps.window.outputs.window }}"
 
   classify-aggregate:
     runs-on: ubuntu-latest
@@ -81,8 +109,9 @@ jobs:
           CLASSIFIER_ENDPOINT: ${{ env.CLASSIFIER_ENDPOINT }}
         run: |
           uv run jobs/classify_headlines.py \
-            --city "$CITY" \
-            --window-start "${{ needs.fetch-headlines.outputs.window_start }}" \
+            --city "${{ env.CITY }}" \
+            --date "${{ needs.fetch-headlines.outputs.date }}" \
+            --window "${{ needs.fetch-headlines.outputs.window }}" \
             --endpoint "$CLASSIFIER_ENDPOINT"
 
   generate-visualization:
@@ -111,5 +140,6 @@ jobs:
       - name: Generate or fetch visualization
         run: |
           uv run jobs/generate_visualization.py \
-            --city "$CITY" \
-            --window-start "${{ needs.fetch-headlines.outputs.window_start }}"
+            --city "${{ env.CITY }}" \
+            --date "${{ needs.fetch-headlines.outputs.date }}" \
+            --window "${{ needs.fetch-headlines.outputs.window }}"

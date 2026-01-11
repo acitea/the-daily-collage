@@ -18,7 +18,7 @@ BACKEND_ROOT = CURRENT_DIR.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from jobs.utils import ensure_backend_path, parse_window_start
+from jobs.utils import ensure_backend_path, parse_window_start, build_window_datetimes
 
 # Ensure local imports resolve when run as a script
 ensure_backend_path()
@@ -110,12 +110,9 @@ def aggregate_weighted(headlines: List[Dict], categories: List[str]) -> Dict[str
 def main():
     parser = argparse.ArgumentParser(description="Classify headlines via API and aggregate vibe vector")
     parser.add_argument("--city", type=str, default="stockholm", help="City/region label used in storage")
-    parser.add_argument(
-        "--window-start",
-        type=str,
-        default=None,
-        help="ISO timestamp for the 6-hour window start (defaults to current window)",
-    )
+    parser.add_argument("--date", type=str, default=None, help="Date in YYYY-MM-DD (UTC)")
+    parser.add_argument("--window", type=str, default=None, help="6h window string in 'HH-HH' format (UTC)")
+    parser.add_argument("--window-start", type=str, default=None, help="Legacy: ISO timestamp for window start (UTC)")
     parser.add_argument(
         "--endpoint",
         type=str,
@@ -129,8 +126,13 @@ def main():
     )
     args = parser.parse_args()
 
-    window_start = parse_window_start(args.window_start)
-    logger.info(f"Using window start: {window_start}")
+    if args.date and args.window:
+        window_start, window_end = build_window_datetimes(args.date, args.window)
+    else:
+        window_start = parse_window_start(args.window_start)
+        from datetime import timedelta
+        window_end = window_start + timedelta(hours=6)
+    logger.info(f"Using window: {window_start} to {window_end}")
 
     service = get_or_create_hopsworks_service(
         api_key=settings.hopsworks.api_key,
@@ -142,7 +144,7 @@ def main():
         raise SystemExit(1)
 
     fg = service.get_or_create_headline_feature_group()
-    df = fg.select_all().filter((fg.city == args.city) & (fg.timestamp == window_start)).read()
+    df = fg.select_all().filter((fg.city == args.city) & (fg.timestamp >= window_start) & (fg.timestamp < window_end)).read()
 
     if df.empty:
         logger.warning("No headlines found to classify")

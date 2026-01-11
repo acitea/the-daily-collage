@@ -15,7 +15,7 @@ BACKEND_ROOT = CURRENT_DIR.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from jobs.utils import ensure_backend_path, parse_window_start
+from jobs.utils import ensure_backend_path, parse_window_start, build_window_datetimes
 
 # Ensure local imports resolve when run as a script
 ensure_backend_path()
@@ -35,12 +35,9 @@ def to_score_map(vibe_vector: Dict[str, tuple]) -> Dict[str, float]:
 def main():
     parser = argparse.ArgumentParser(description="Generate visualization for a vibe vector")
     parser.add_argument("--city", type=str, default="stockholm", help="City/region label used in storage")
-    parser.add_argument(
-        "--window-start",
-        type=str,
-        default=None,
-        help="ISO timestamp for the 6-hour window start (defaults to current window)",
-    )
+    parser.add_argument("--date", type=str, default=None, help="Date in YYYY-MM-DD (UTC)")
+    parser.add_argument("--window", type=str, default=None, help="6h window string in 'HH-HH' format (UTC)")
+    parser.add_argument("--window-start", type=str, default=None, help="Legacy: ISO timestamp for window start (UTC)")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -48,7 +45,10 @@ def main():
     )
     args = parser.parse_args()
 
-    window_start = parse_window_start(args.window_start)
+    if args.date and args.window:
+        window_start, _ = build_window_datetimes(args.date, args.window)
+    else:
+        window_start = parse_window_start(args.window_start)
     logger.info(f"Using window start: {window_start}")
 
     hopsworks_service = get_or_create_hopsworks_service(
