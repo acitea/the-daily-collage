@@ -175,8 +175,8 @@ def load_model(
     logger.info("✓ Model loaded and ready for inference")
 
 
-def predict_single(title: str, description: str = "") -> Dict[str, Dict[str, Union[float, str]]]:
-    """Run inference on a single article."""
+def predict_single(title: str, description: str = "") -> Dict[str, Union[float, str]]:
+    """Run inference on a single article, return only the top category."""
     if _model is None:
         raise RuntimeError("Model not loaded. Call load_model() first.")
     
@@ -198,16 +198,20 @@ def predict_single(title: str, description: str = "") -> Dict[str, Dict[str, Uni
     with torch.no_grad():
         outputs = _model(input_ids, attention_mask)
     
-    # Parse results
-    result = {}
+    # Parse results and find top category
+    all_scores = {}
     for cat in SIGNAL_CATEGORIES:
         score_tensor, tag_logits = outputs[cat]
         score = float(score_tensor.squeeze().cpu())
         pred_idx = int(tag_logits.argmax(dim=-1).squeeze().cpu())
         tag = TAG_VOCAB[cat][pred_idx] if 0 <= pred_idx < len(TAG_VOCAB[cat]) else ""
-        result[cat] = {"score": score, "tag": tag}
+        all_scores[cat] = (score, tag)
     
-    return result
+    # Return only top-ranked category
+    top_cat = max(all_scores.items(), key=lambda x: abs(x[1][0]))  # Sort by absolute score
+    category, (score, tag) = top_cat
+    
+    return {"category": category, "score": score, "tag": tag}
 
 
 @app.function(
@@ -240,8 +244,8 @@ def predict(payload: Dict) -> Dict:
       - Batch: {"instances": [{"title": "...", "description": "..."}, ...]}
     
     Returns:
-      - Single: {"emergencies": {"score": 0.5, "tag": "fire"}, ...}
-      - Batch: {"predictions": [{...}, {...}]}
+      - Single: {"category": "festivals", "score": 0.85, "tag": "concert"}
+      - Batch: {"predictions": [{"category": "...", "score": ..., "tag": "..."}, ...]}
     """
     # Lazy-load model on first invocation
     if _model is None:
@@ -294,10 +298,12 @@ async def api_predict(request: dict) -> dict:
     
     Example response:
     {
-      "emergencies": {"score": 0.1, "tag": ""},
-      "crime": {"score": -0.05, "tag": ""},
-      "festivals": {"score": 0.85, "tag": "concert"},
-      ...
+      "status": "success",
+      "data": {
+        "category": "festivals",
+        "score": 0.85,
+        "tag": "concert"
+      }
     }
     """
     try:
