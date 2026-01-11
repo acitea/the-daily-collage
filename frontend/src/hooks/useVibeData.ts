@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { API_BASE_URL, ENDPOINTS } from '../config/api';
+import { getCurrentCacheKey, generateCacheKey } from '../utils/vibeHash';
 import type { VibeResponse, Location } from '../types/vibe';
 import mockVibes from '../mocks/vibeData';
 
@@ -16,8 +17,12 @@ export const useCurrentVibe = (location: string) => {
         const mockData = mockVibes['0000-12-31T00:00:00Z'];
         return mockData;
       }
+      // Generate cache_key directly from current time
+      const cacheKey = getCurrentCacheKey(location);
+      
+      // Fetch vibe using cache_key
       const { data } = await axios.get(
-        `${API_BASE_URL}${ENDPOINTS.currentVibe(location)}`
+        `${API_BASE_URL}${ENDPOINTS.vibe(cacheKey)}`
       );
       return data;
     },
@@ -38,8 +43,12 @@ export const useHistoricalVibe = (location: string, timestamp: string | null) =>
         // Fallback to a default mock vibe
         return mockVibes['0000-12-31T00:00:00Z'];
       }
+      // Generate cache_key directly from the provided timestamp
+      const cacheKey = generateCacheKey(location, timestamp!);
+      
+      // Fetch vibe using cache_key
       const { data } = await axios.get(
-        `${API_BASE_URL}${ENDPOINTS.historicalVibe(location, timestamp!)}`
+        `${API_BASE_URL}${ENDPOINTS.vibe(cacheKey)}`
       );
       return data;
     },
