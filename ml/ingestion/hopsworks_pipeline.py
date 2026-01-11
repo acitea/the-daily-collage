@@ -1,5 +1,7 @@
 """
 Hopsworks-integrated ingestion pipeline for The Daily Collage.
+This script is now used as a reference of what a deployed complete ingestion pipeline looks like.
+This script is NOT used anywhere at all, except locally to test the end-to-end flow.
 
 This pipeline:
 1. Fetches news from GDELT
@@ -469,7 +471,6 @@ def run_ingestion_pipeline(
         logger.info("Storing data in Hopsworks...")
         
         hopsworks_service = get_or_create_hopsworks_service(
-            enabled=settings.hopsworks.enabled,
             api_key=settings.hopsworks.api_key,
             project_name=settings.hopsworks.project_name,
             host=settings.hopsworks.host,

@@ -1,0 +1,115 @@
+name: Daily Collage Pipeline
+
+on:
+  schedule:
+    - cron: "20 */6 * * *" # GDELT updates every 15 minutes, so run at 20 past every 6th hour
+  workflow_dispatch:
+
+env:
+  COUNTRY: sweden
+  CITY: stockholm
+  CLASSIFIER_ENDPOINT: https://terahidro2003--daily-collage-classifier-api-predict.modal.run
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  fetch-headlines:
+    runs-on: ubuntu-latest
+    outputs:
+      window_start: ${{ steps.window.outputs.window_start }}
+    env:
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
+      HOPSWORKS_HOST: ${{ secrets.HOPSWORKS_HOST || vars.HOPSWORKS_HOST }}
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'local' }}
+      STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
+      ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            backend
+            .github
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Compute window start
+        id: window
+        run: |
+          uv run python - <<'PY'
+          from datetime import datetime
+          now = datetime.utcnow()
+          start_hour = (now.hour // 6) * 6
+          window = datetime(now.year, now.month, now.day, start_hour)
+          with open("$GITHUB_OUTPUT", "a", encoding="utf-8") as fh:
+              fh.write(f"window_start={window.isoformat()}\n")
+          PY
+      - name: Fetch headlines
+        run: uv run jobs/fetch_headlines.py --country "$COUNTRY" --city "$CITY" --window-start "${{ steps.window.outputs.window_start }}"
+
+  classify-aggregate:
+    runs-on: ubuntu-latest
+    needs: fetch-headlines
+    env:
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
+      HOPSWORKS_HOST: ${{ secrets.HOPSWORKS_HOST || vars.HOPSWORKS_HOST }}
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'local' }}
+      STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
+      ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            backend
+            .github
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Classify headlines and aggregate vibe
+        env:
+          CLASSIFIER_ENDPOINT: ${{ env.CLASSIFIER_ENDPOINT }}
+        run: |
+          uv run jobs/classify_headlines.py \
+            --city "$CITY" \
+            --window-start "${{ needs.fetch-headlines.outputs.window_start }}" \
+            --endpoint "$CLASSIFIER_ENDPOINT"
+
+  generate-visualization:
+    runs-on: ubuntu-latest
+    needs: classify-aggregate
+    env:
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
+      HOPSWORKS_HOST: ${{ secrets.HOPSWORKS_HOST || vars.HOPSWORKS_HOST }}
+      STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'local' }}
+      STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
+      ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            backend
+            .github
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Generate or fetch visualization
+        run: |
+          uv run jobs/generate_visualization.py \
+            --city "$CITY" \
+            --window-start "${{ needs.fetch-headlines.outputs.window_start }}"

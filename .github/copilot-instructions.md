@@ -13,15 +13,18 @@ The system architecture has evolved to a **Hybrid Composition** model with a **F
 ```
 project_root/
 ├── backend/
-│   ├── visualization/    # Layout composition (Pillow) + AI Polish (Stability)
-│   ├── server/           # FastAPI for serving vibes & metadata
+│   ├── _types/           # All relevant types for the project
+│   ├── storage/          # File storage services
+│   ├── visualization/    # Layout composition + AI Polish (2 stage image generation)
+│   ├── app/              # FastAPI for serving vibes & metadata
 │   ├── utils/            # Any relevant or useful scripts for one-off or routinely used
 │   └── assets/           # Sticker PNGs and overlays
 ├── ml/                   # Hopsworks feature definitions & model logic
 │   ├── data/             # any data needed for training
+│   ├── utils/            # Utility scripts for data processing, for training, evaluation, etc.
 │   ├── notebooks/        # notebooks for experimentation, eda, training
-│   ├── ingestion/        # GDELT & Weather API fetching -> Feature Store
-│   └── models/           # Our multi-headed probability models
+│   ├── ingestion/        # GDELT & Weather API fetching -> Feature Store -> Vibe Vector
+│   └── models/           # Relevant scripts to define, train, and serve models
 └── frontend/             # React + Vite application
 ```
 
@@ -52,8 +55,8 @@ The system tracks **9 Primary Signals**. The ML model outputs a **Score** (-1.0 
 
 *   **Language**: Python 3.10+ (Backend/ML), TypeScript (Frontend).
 *   **ML & Data**: **Hopsworks** (Feature Store & Model Registry), `gdeltdoc`.
-*   **Generation**: `Pillow` (Layout), **Stability AI API** (Image-to-Image Polish).
-*   **Backend**: `fastapi`, `redis` (or similar for cache), S3-compatible storage.
+*   **Generation**: `Pillow` (Layout), **Replicate AI API** (Image-to-Image Polish).
+*   **Backend**: `fastapi`, some file storage provider.
 *   **Frontend**: React, Vite.
 
 ## Implementation Guidelines
@@ -69,8 +72,8 @@ The system tracks **9 Primary Signals**. The ML model outputs a **Score** (-1.0 
     *   Place assets into Zones (Sky, City, Street) based on logic.
     *   **CRITICAL**: Record the `{x, y, w, h}` coordinates of every placed asset into a `hitboxes` list.
     *   Apply "Atmosphere Overlays" (rain, sun gradients) as the final layer.
-*   **Step 2: Polish (Stability AI)**:
-    *   Send the Layout image to Stability AI `Img2Img`.
+*   **Step 2: Polish (Replicate AI)**:
+    *   Send the Layout image to Replicate AI `Img2Img`.
     *   **Constraint**: Keep `denoising_strength` (or `image_strength`) low (~0.35).
     *   *Reason*: We need the AI to beautify the style but **preserve the hitbox locations**.
 
@@ -95,10 +98,3 @@ The system tracks **9 Primary Signals**. The ML model outputs a **Score** (-1.0 
 2.  **Cost Management**: Strict caching is mandatory. Do not expose the "Generate" function to the public API.
 3.  **Asset Library**: You need a `assets/` folder with transparent PNGs for every potential tag. If a tag is missing, fallback to a generic category icon.
 4.  **GDELT Data**: Continue using `gdeltdoc` but ensure the output flows into Hopsworks.
-
-## Success Criteria
-
-- [ ] **Pipeline**: News ingestion flows into Hopsworks Feature Store.
-- [ ] **Hybrid Gen**: `generate_layout` produces a messy collage; `polish_image` makes it look artistic.
-- [ ] **Interactivity**: Clicking the "Fire" element in the React app opens the correct news articles.
-- [ ] **Idempotency**: Refreshing the page does NOT trigger a new Stability AI API call.

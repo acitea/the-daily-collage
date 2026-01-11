@@ -89,7 +89,10 @@ class HopsworksService:
                 self._mr = None
             
             logger.info(f"Successfully connected to Hopsworks project: {self.project_name}")
-            
+
+            # Get dataset API for artifact storage
+            self._dataset_api = self._project.get_dataset_api()
+
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
             logger.error(f"Project: {self.project_name}")
@@ -690,38 +693,33 @@ class HopsworksService:
     
     def get_visualization(
         self,
-        vibe_hash: str,
+        vibe_key: str,
         artifact_collection: str = "vibe_images",
     ) -> Optional[Tuple[bytes, Dict]]:
         """
-        Retrieve a visualization from Hopsworks artifact registry.
+        Retrieve a visualization from Hopsworks file storage.
         
         Args:
-            vibe_hash: Unique hash for the visualization
-            artifact_collection: Name of artifact collection to retrieve from
+            vibe_key: Unique hash for the visualization
+            artifact_collection: Name of file storage to retrieve from
             
         Returns:
             Tuple of (image_bytes, metadata_dict) or None if not found
         """
-        if not self._project:
+        if not self._fs:
             self.connect()
             
         try:
             import json
             
-            # Get artifacts API
-            artifacts_api = self._project.get_artifacts_api()
-            
-            # Download image artifact
-            image_path = artifacts_api.download(
-                name=f"{vibe_hash}.png",
-                collection=artifact_collection,
+            # Download image from dataset
+            image_path = self._dataset_api.download(
+                path=f"{artifact_collection}/{vibe_key}.png",
             )
             
-            # Download metadata artifact
-            metadata_path = artifacts_api.download(
-                name=f"{vibe_hash}_metadata.json",
-                collection=artifact_collection,
+            # Download metadata from dataset
+            metadata_path = self._dataset_api.download(
+                path=f"{artifact_collection}/{vibe_key}_metadata.json",
             )
             
             if not image_path or not metadata_path:
@@ -735,7 +733,7 @@ class HopsworksService:
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
             
-            logger.info(f"Retrieved visualization from Hopsworks: {vibe_hash}")
+            logger.info(f"Retrieved visualization from Hopsworks: {vibe_key}")
             return image_data, metadata
             
         except Exception as e:
@@ -765,15 +763,51 @@ class HopsworksService:
             self.connect()
         
         try:
-            dataset_api = self._project.get_dataset_api()
-            image_path = f"Resources/vibe_images/{vibe_hash}.png"
+            fg = self.get_or_create_headline_feature_group(fg_name, version)
             
-            # Try to get file info
-            dataset_api.get(image_path)
-            return True
+            # Query for city and timestamp
+            query = fg.select_all().filter(
+                (fg.city == city) & (fg.timestamp == timestamp)
+            )
             
-        except Exception:
-            return False
+            df = query.read()
+            
+            if df.empty:
+                logger.warning(f"No headlines found for {city} at {timestamp}")
+                return []
+            
+            # Convert to list of dicts with structured classifications
+            headlines = []
+            
+            for _, row in df.iterrows():
+                headline = {
+                    "article_id": row["article_id"],
+                    "title": row["title"],
+                    "url": row["url"],
+                    "source": row["source"],
+                    "classifications": {}
+                }
+                
+                # Add category scores and tags
+                for category in self.SIGNAL_CATEGORIES:
+                    score = row.get(f"{category}_score", 0.0)
+                    tag = row.get(f"{category}_tag", "")
+                    if score != 0.0 or tag:  # Only include if there's data
+                        headline["classifications"][category] = {
+                            "score": score,
+                            "tag": tag
+                        }
+                
+                headlines.append(headline)
+            
+            logger.info(f"Retrieved {len(headlines)} headlines for {city} at {timestamp}")
+            return headlines
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve headlines: {e}")
+            return []
+
+
 
     def register_model(
         self,
@@ -906,17 +940,15 @@ class MockHopsworksService:
         return vibe_hash in self.storage
 
 
-def create_hopsworks_service(
-    enabled: bool = True,
+def get_or_create_hopsworks_service(
     api_key: Optional[str] = None,
     project_name: Optional[str] = None,
     host: Optional[str] = None,
 ) -> Optional[HopsworksService]:
     """
-    Factory function to create HopsworksService.
+    Factory function to get or create HopsworksService.
     
     Args:
-        enabled: Whether Hopsworks integration is enabled
         api_key: Hopsworks API key
         project_name: Project name
         host: Hopsworks host
@@ -924,15 +956,17 @@ def create_hopsworks_service(
     Returns:
         HopsworksService instance or None if disabled/missing credentials
     """
+    global instance
+    if instance:
+        return instance
+
     if not api_key or not project_name:
         logger.warning("Hopsworks API key or project name not configured")
-        return None
-    
-    try:
-        global instance
-        if instance:
-            return instance
+        logger.info("Using MockHopsworksService")
+        instance = MockHopsworksService()
+        return instance
 
+    try:
         instance = HopsworksService(
             api_key=api_key,
             project_name=project_name,

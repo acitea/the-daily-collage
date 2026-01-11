@@ -22,16 +22,12 @@ class VibeHash:
     """
     Generates deterministic cache keys from vibe vector data.
 
-    Cache key format: City_YYYY-MM-DD_TimeWindow_Hash
-    where Hash is SHA256 of discretized scores.
+    Cache key format: City_YYYY-MM-DD_TimeWindow
     """
 
     # Time windows (6-hour windows as per Daily Collage spec)
     WINDOWS_PER_DAY = 4
     WINDOW_DURATION_HOURS = 24 // WINDOWS_PER_DAY  # 6 hours
-
-    # Discretization: round scores to nearest multiple of this
-    DISCRETIZATION_STEP = 0.1
 
     @classmethod
     def generate(
