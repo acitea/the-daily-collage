@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse, Response, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 # Ensure project root is on the Python path for absolute imports
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,20 @@ app = FastAPI(
     title="The Daily Collage API",
     description="REST API for generating location-based news visualizations",
     version="0.2.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://acitea.github.io",
+        "https://the-daily-collage.onrender.com",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Import modules
@@ -292,54 +307,6 @@ async def get_vibe(
         logger.info(f"Querying Hopsworks for vibe vector: {city} at {timestamp}")
         vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
         
-        if vibe_data is None:
-            # No data available - trigger backfill
-            logger.warning(f"No vibe data for {city} at {timestamp}, triggering backfill")
-            
-            # Map city to country code (hardcoded for supported cities)
-            country_map = {
-                "stockholm": "sweden",
-                "sweden": "sweden",
-                "gothenburg": "sweden",
-                "malmo": "sweden",
-                "malmö": "sweden",
-            }
-            country = country_map.get(city.lower())
-            
-            if not country:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"City '{city}' not supported. Supported cities: {list(country_map.keys())}",
-                )
-            
-            # Check if already backfilling (use cache_key for tracking)
-            if cache_key in active_backfills:
-                logger.info(f"Backfill already in progress for {cache_key}")
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Data backfill in progress for {cache_key}. Please retry in 5 minutes.",
-                    headers={"Retry-After": "300"},
-                )
-            
-            # Mark as active and queue backfill task
-            active_backfills.add(cache_key)
-            logger.info(f"Added {cache_key} to active backfills")
-            
-            background_tasks.add_task(
-                trigger_backfill_ingestion,
-                city=city,
-                country=country,
-                active_backfills=active_backfills,
-                max_articles=250,
-            )
-            
-            # Return 503 with Retry-After header
-            raise HTTPException(
-                status_code=503,
-                detail=f"No data available for {cache_key}. Backfill triggered. Please retry in 5 minutes.",
-                headers={"Retry-After": "300"},
-            )
-        
         # Convert Hopsworks vibe data format to API format
         # Hopsworks format: {"emergencies": (0.8, "fire", 5), ...}
         # API format: {"emergencies": 0.8, ...}
@@ -356,8 +323,7 @@ async def get_vibe(
         try:
             # Attempt to get headlines, but don't fail if unavailable
             source_articles = hopsworks_service.get_headlines_for_city(
-                city=city,
-                timestamp=timestamp,
+                cache_key=cache_key,
             )
             logger.info(f"Retrieved {len(source_articles)} source articles")
         except Exception as e:
@@ -393,63 +359,6 @@ async def get_vibe(
         raise
     except Exception as e:
         logger.error(f"Error getting vibe for {cache_key}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/cache-key/{city}", tags=["Utility"])
-async def generate_cache_key(
-    city: str,
-    timestamp: Optional[str] = Query(None, description="ISO format timestamp (defaults to current time)"),
-):
-    """
-    Generate a cache_key for a given city and timestamp.
-    
-    This is a utility endpoint to help frontends construct valid cache_keys.
-    
-    Args:
-        city: City name (e.g., "stockholm")
-        timestamp: Optional ISO format timestamp (defaults to current time)
-        
-    Returns:
-        Dictionary with cache_key and parsed info
-        
-    Example:
-        GET /api/cache-key/stockholm?timestamp=2026-01-03T15:30:00
-        Returns: {"cache_key": "stockholm_2026-01-03_12-18", "city": "stockholm", ...}
-    """
-    try:
-        from storage.core import VibeHash
-        
-        # Parse timestamp or use current
-        if timestamp:
-            try:
-                ts = datetime.fromisoformat(timestamp)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid timestamp format: {timestamp}. Use ISO format (YYYY-MM-DDTHH:MM:SS)",
-                )
-        else:
-            ts = datetime.utcnow()
-        
-        # Generate cache_key
-        cache_key = VibeHash.generate(city=city, timestamp=ts)
-        
-        # Parse it back for validation
-        info = VibeHash.extract_info(cache_key)
-        
-        return JSONResponse(content={
-            "cache_key": cache_key,
-            "city": info["city"],
-            "date": info["date"].strftime("%Y-%m-%d"),
-            "window": info["window"],
-            "timestamp": ts.isoformat(),
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error generating cache key: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -547,53 +456,6 @@ async def get_visualization_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/cache/status", tags=["Cache"])
-async def check_cache_status(
-    city: str = Query(..., description="City name"),
-    vibe_vector: Optional[str] = Query(None, description="JSON-encoded vibe vector"),
-) -> CacheStatusResponse:
-    """
-    Check if a vibe is cached.
-
-    Args:
-        city: Geographic location
-        vibe_vector: JSON-encoded vibe vector dict
-
-    Returns:
-        Cache status with vibe hash
-    """
-    if not viz_service:
-        raise HTTPException(
-            status_code=503, detail="Visualization service not initialized"
-        )
-
-    try:
-        import json
-
-        if not vibe_vector:
-            raise HTTPException(status_code=400, detail="vibe_vector required")
-
-        vector = json.loads(vibe_vector)
-        timestamp = datetime.utcnow()
-
-        cached = viz_service.cache.exists(city, timestamp)
-
-        from storage import VibeHash
-        cache_key = VibeHash.generate(city, timestamp)
-
-        return CacheStatusResponse(
-            cache_key=cache_key,
-            cached=cached,
-            timestamp=timestamp.isoformat(),
-        )
-
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid vibe_vector JSON")
-    except Exception as e:
-        logger.error(f"Error checking cache status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/hitboxes/{cache_key}", tags=["Metadata"])
 async def get_hitboxes(cache_key: str):
     """
@@ -651,7 +513,7 @@ async def get_articles_for_vibe(cache_key: str):
         )
 
     try:
-        # Parse cache_key to extract city and timestamp
+        # Parse cache_key to extract city and timestamp for response metadata
         from storage.core import VibeHash
         cache_info = VibeHash.extract_info(cache_key)
         
@@ -667,10 +529,9 @@ async def get_articles_for_vibe(cache_key: str):
         window_start_hour = int(window.split("-")[0])
         timestamp = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
         
-        # Retrieve headlines from Hopsworks
+        # Retrieve headlines from Hopsworks using cache_key
         articles = hopsworks_service.get_headlines_for_city(
-            city=city,
-            timestamp=timestamp,
+            cache_key=cache_key,
         )
         
         return JSONResponse(
@@ -695,8 +556,8 @@ async def get_supported_locations():
     supported = [
         {"code": "se", "name": "Sweden", "type": "country"},
         {"code": "stockholm", "name": "Stockholm", "type": "city"},
-        {"code": "gothenburg", "name": "Gothenburg", "type": "city"},
-        {"code": "malmo", "name": "Malmö", "type": "city"},
+        # {"code": "gothenburg", "name": "Gothenburg", "type": "city"},
+        # {"code": "malmo", "name": "Malmö", "type": "city"},
     ]
     return JSONResponse(content={"locations": supported})
 
