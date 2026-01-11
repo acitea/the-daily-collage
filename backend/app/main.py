@@ -119,6 +119,53 @@ async def shutdown_event():
     logger.info("Shutting down The Daily Collage API server")
 
 
+def build_signals_from_articles(source_articles: List[Dict]) -> List[Dict]:
+    """
+    Build signals directly from article classifications.
+    
+    Each article already contains its own classification scores and tags.
+    We aggregate by category to create signal objects.
+    
+    Args:
+        source_articles: List of article dicts with classifications
+        
+    Returns:
+        List of signal dicts with category, score, tag, and articles
+    """
+    # Build a map of category -> {score, tag, articles}
+    category_data = {}
+    
+    for article in source_articles:
+        classifications = article.get("classifications", {})
+        for category, class_info in classifications.items():
+            if category not in category_data:
+                category_data[category] = {
+                    "score": class_info.get("score", 0.0),
+                    "tag": class_info.get("tag", ""),
+                    "articles": []
+                }
+            
+            # Add article to this category
+            category_data[category]["articles"].append({
+                "title": article.get("title", ""),
+                "url": article.get("url", ""),
+                "source": article.get("source", ""),
+                "published_at": article.get("timestamp", ""),
+            })
+    
+    # Convert to signals list
+    signals = [
+        {
+            "category": category,
+            "score": data["score"],
+            "tag": data["tag"],
+            "articles": data["articles"],
+        }
+        for category, data in category_data.items()
+    ]
+    
+    return signals
+
 @app.get("/", tags=["Health"])
 async def root():
     """Root endpoint - API health check."""
@@ -283,12 +330,25 @@ async def get_vibe(
                 if hitboxes and not isinstance(hitboxes[0], Hitbox):
                     hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
                 
-                # Retrieve vibe_vector from Hopsworks (not stored in metadata)
+                # Retrieve vibe_vector and articles from Hopsworks (not stored in metadata)
                 vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
                 vibe_vector = {
                     category: score
                     for category, (score, tag, count) in vibe_data.items()
                 } if vibe_data else {}
+                
+                # Get source articles
+                source_articles = []
+                try:
+                    source_articles = hopsworks_service.get_headlines_for_city(
+                        cache_key=cache_key,
+                    )
+                    logger.info(f"Retrieved {len(source_articles)} source articles from cache")
+                except Exception as e:
+                    logger.warning(f"Could not retrieve source articles: {e}")
+                
+                # Transform into signals format from articles
+                signals = build_signals_from_articles(source_articles)
                 
                 # Construct image URL from cache_key
                 image_url = f"/api/visualization/{cache_key}/image"
@@ -299,6 +359,7 @@ async def get_vibe(
                     image_url=image_url,
                     hitboxes=hitboxes,
                     vibe_vector=vibe_vector,
+                    signals=signals,
                     cached=True,
                     generated_at=datetime.utcnow().isoformat(),
                 )
@@ -342,6 +403,9 @@ async def get_vibe(
         if hitboxes and not isinstance(hitboxes[0], Hitbox):
             hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
         
+        # Transform vibe_vector and source_articles into signals format for frontend
+        signals = build_signals_from_articles(source_articles)
+        
         # Construct image URL from cache_key
         image_url = f"/api/visualization/{metadata['cache_key']}/image"
         
@@ -351,6 +415,7 @@ async def get_vibe(
             image_url=image_url,
             hitboxes=hitboxes,
             vibe_vector=vibe_vector,
+            signals=signals,
             cached=metadata.get("cached", False),
             generated_at=datetime.utcnow().isoformat(),
         )

@@ -26,6 +26,7 @@ class VisualizationResponse(BaseModel):
     image_url: str
     hitboxes: List[Hitbox]  # Now using Hitbox directly
     vibe_vector: Dict[str, float]
+    signals: Optional[List[Dict]] = None  # Signals with articles for frontend
     cached: bool
     generated_at: str
 
