@@ -7,13 +7,12 @@ Defines:
 - StorageBackend: Abstract interface for storage implementations
 """
 
-import hashlib
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from visualization.assets import Hitbox
+from _types import Hitbox
 
 logger = logging.getLogger(__name__)
 

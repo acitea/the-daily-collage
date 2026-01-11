@@ -9,10 +9,9 @@ Provides:
 - CacheMetadata: Metadata about cached visualizations
 """
 
-from storage.cache import VibeCache
-from storage.core import CacheMetadata, StorageBackend, VibeHash
-from storage.factory import create_storage_backend
-from storage.providers import (
+from .cache import VibeCache
+from .factory import create_storage_backend
+from .providers import (
     HopsworksStorageBackend,
     LocalStorageBackend,
     MockS3StorageBackend,
@@ -20,9 +19,6 @@ from storage.providers import (
 
 __all__ = [
     "VibeCache",
-    "StorageBackend",
-    "VibeHash",
-    "CacheMetadata",
     "create_storage_backend",
     "LocalStorageBackend",
     "MockS3StorageBackend",

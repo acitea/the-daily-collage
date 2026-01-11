@@ -2,9 +2,9 @@
 Storage backend implementations.
 """
 
-from storage.providers.local import LocalStorageBackend
-from storage.providers.mock_s3 import MockS3StorageBackend
-from storage.providers.hopsworks import HopsworksStorageBackend
+from .local import LocalStorageBackend
+from .mock_s3 import MockS3StorageBackend
+from .hopsworks import HopsworksStorageBackend
 
 __all__ = [
     "LocalStorageBackend",

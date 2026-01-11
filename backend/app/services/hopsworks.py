@@ -56,48 +56,35 @@ class HopsworksService:
     def connect(self):
         """Establish connection to Hopsworks."""
         try:
-            import hsfs
-            
             logger.info(f"Connecting to Hopsworks project: {self.project_name}")
             
-            # Host is required by hsfs - default to managed cloud
-            host = self.host if self.host else "c.app.hopsworks.ai"
-            
-            logger.info(f"Using host: {host}")
-            
-            # Create connection with required parameters
-            connection = hsfs.connection(
-                host=host,
+            self._project = hopsworks.login(
+                host=self.host,
                 project=self.project_name,
                 api_key_value=self.api_key,
             )
             
-            # Get feature store (explicitly pass project name)
-            self._fs = connection.get_feature_store(name=self.project_name)
+            # Get feature store from project
+            self._fs = self._project.get_feature_store()
             logger.info(f"Connected to feature store: {self._fs.name}")
             
-            # Try to get model registry (requires separate import)
+            # Get model registry
             try:
-                import hsml
-                self._mr = connection.get_model_registry()
+                self._mr = self._project.get_model_registry()
                 logger.info("Model registry connected")
-            except ImportError:
-                logger.warning("hsml package not installed. Model registry features unavailable.")
-                self._mr = None
             except Exception as e:
                 logger.warning(f"Could not access model registry: {e}")
                 self._mr = None
             
-            logger.info(f"Successfully connected to Hopsworks project: {self.project_name}")
-
             # Get dataset API for artifact storage
             self._dataset_api = self._project.get_dataset_api()
+            logger.info(f"Successfully connected to Hopsworks project: {self.project_name}")
 
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
             logger.error(f"Project: {self.project_name}")
             logger.error(f"Host: {self.host or 'c.app.hopsworks.ai (default)'}")
-            logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
+            logger.error("Make sure 'hopsworks' package is installed: pip install hopsworks")
             logger.error("For managed Hopsworks, ensure your API key is valid and the project exists")
             raise
             
@@ -144,6 +131,7 @@ class HopsworksService:
             
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
+            if not fg: raise Exception("Feature group not found")
             logger.info(f"Using existing feature group: {fg_name} v{version}")
             return fg
         except Exception:
@@ -212,6 +200,7 @@ class HopsworksService:
         try:
             # Try to get existing feature group
             fg = self._fs.get_feature_group(name=fg_name, version=version)
+            if not fg: raise Exception("Feature group not found")
             logger.info(f"Using existing feature group: {fg_name} v{version}")
             return fg
         except Exception:
@@ -250,6 +239,7 @@ class HopsworksService:
 
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
+            if not fg: raise Exception("Feature group not found")
             logger.info(f"Using existing feature group: {fg_name} v{version}")
             return fg
         except Exception:
@@ -298,6 +288,7 @@ class HopsworksService:
 
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
+            if not fg: raise Exception("Feature group not found")
             logger.info(f"Using existing feature group: {fg_name} v{version}")
             return fg
         except Exception:
@@ -394,6 +385,7 @@ class HopsworksService:
 
         try:
             fg = self._fs.get_feature_group(name=fg_name, version=version)
+            if not fg: raise Exception("Feature group not found")
             logger.info(f"Using existing feature group: {fg_name} v{version}")
             return fg
         except Exception:

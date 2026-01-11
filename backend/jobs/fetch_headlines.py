@@ -65,27 +65,34 @@ def fetch_recent_articles_range(country: str, start_dt, end_dt, max_articles: in
 
 
 def to_headline_rows(df: pl.DataFrame) -> List[Dict]:
-    """Convert raw articles into headline records expected by Hopsworks storage."""
+    """Convert raw GDELT articles into headline records.
+    
+    GDELT 2.0 provides: url, url_mobile, title, seendate, socialimage, domain, language, sourcecountry
+    Note: GDELT does not provide article descriptions/excerpts - only the title and metadata.
+    """
     rows: List[Dict] = []
     for article in df.iter_rows(named=True):
         title = (article.get("title") or "").strip()
         url = (article.get("url") or "").strip()
-        description = (article.get("description") or article.get("excerpt") or "").strip()
-        source = (article.get("source") or article.get("domain") or "").strip()
-        published_at = article.get("date")
-        try:
-            # Try to parse to datetime if it's a string
-            if isinstance(published_at, str):
+        source = (article.get("domain") or "").strip()
+        seendate = article.get("seendate")
+        
+        # Parse publication date from seendate (GDELT format: YYYYMMDDTHHMMSSz)
+        published_at = None
+        if seendate:
+            try:
                 from datetime import datetime as _dt
-                published_at = _dt.fromisoformat(published_at.replace("Z", ""))
-        except Exception:
-            published_at = None
+                if isinstance(seendate, str):
+                    # GDELT seendate is ISO 8601 format: 20250111T001500Z
+                    published_at = _dt.strptime(seendate, "%Y%m%dT%H%M%SZ")
+            except Exception:
+                published_at = None
 
         rows.append(
             {
                 "article_id": make_article_id(url, title),
                 "title": title,
-                "description": description,
+                "description": "",  # GDELT does not provide descriptions
                 "url": url,
                 "source": source,
                 "published_at": published_at,
