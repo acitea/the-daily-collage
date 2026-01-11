@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 from hopsworks.project import Project
 from hopsworks.core.dataset_api import DatasetApi
 from hsfs.feature_store import FeatureStore
+from hsfs.feature import Feature
 
 from _types import SignalCategory
 
@@ -609,14 +610,20 @@ class HopsworksService:
         try:
             fg = self.get_or_create_vibe_feature_group(fg_name, version)
             
-            # Query for exact city and timestamp match
+            # Compute window_key (matches VibeHash minus city prefix)
+            window_index = timestamp.hour // 6
+            window_str = f"{window_index * 6:02d}-{(window_index + 1) * 6:02d}"
+            window_key = f"{timestamp:%Y-%m-%d}_{window_str}"
+
+            logger.info(f"Querying vibe vector for {city} at {timestamp} (window_key={window_key})")
+            # Query for exact city + window_key match (expected single row)
             query = fg.select_all().filter(
-                (fg.city == city) & (fg.timestamp == timestamp)
+                (Feature('city').like(city)) & (Feature('window_key').like(window_key))
             )
             df = query.read()
             
             if df.empty:
-                logger.warning(f"No vibe vector found for {city} at {timestamp}")
+                logger.warning(f"No vibe vector found for {city} at {timestamp} (window_key={window_key})")
                 return None
                 
             row = df.iloc[0]
@@ -636,108 +643,7 @@ class HopsworksService:
         except Exception as e:
             logger.error(f"Failed to retrieve vibe vector at time: {e}")
             return None
-    
-    def store_visualization(
-        self,
-        vibe_hash: str,
-        image_data: bytes,
-        metadata: Dict,
-        artifact_collection: str = "vibe_images",
-    ):
-        """
-        Store a generated visualization in Hopsworks artifact registry.
-        
-        Args:
-            vibe_hash: Unique hash for this visualization
-            image_data: PNG image bytes
-            metadata: Metadata dict (hitboxes, vibe_vector, etc.)
-            artifact_collection: Name of artifact collection to store in
-        """
-        if not self._project:
-            self.connect()
-            
-        try:
-            import io
-            import json
-            
-            # Get artifacts API
-            artifacts_api = self._project.get_artifacts_api()
-            
-            # Upload image as artifact
-            image_file = io.BytesIO(image_data)
-            image_file.name = f"{vibe_hash}.png"
-            artifacts_api.upload(
-                artifact=image_file,
-                name=f"{vibe_hash}.png",
-                collection=artifact_collection,
-                description=f"Vibe visualization for {vibe_hash}",
-            )
-            
-            # Upload metadata as JSON artifact
-            metadata_json = json.dumps(metadata, indent=2)
-            metadata_file = io.BytesIO(metadata_json.encode())
-            metadata_file.name = f"{vibe_hash}_metadata.json"
-            artifacts_api.upload(
-                artifact=metadata_file,
-                name=f"{vibe_hash}_metadata.json",
-                collection=artifact_collection,
-                description=f"Metadata for vibe visualization {vibe_hash}",
-            )
-            
-            logger.info(f"Stored visualization {vibe_hash} in Hopsworks artifacts")
-            
-        except Exception as e:
-            logger.error(f"Failed to store visualization: {e}")
-            raise
-    
-    def get_visualization(
-        self,
-        vibe_key: str,
-        artifact_collection: str = "vibe_images",
-    ) -> Optional[Tuple[bytes, Dict]]:
-        """
-        Retrieve a visualization from Hopsworks file storage.
-        
-        Args:
-            vibe_key: Unique hash for the visualization
-            artifact_collection: Name of file storage to retrieve from
-            
-        Returns:
-            Tuple of (image_bytes, metadata_dict) or None if not found
-        """
-        if not self._fs:
-            self.connect()
-            
-        try:
-            import json
-            
-            # Download image from dataset
-            image_path = self._dataset_api.download(
-                path=f"{artifact_collection}/{vibe_key}.png",
-            )
-            
-            # Download metadata from dataset
-            metadata_path = self._dataset_api.download(
-                path=f"{artifact_collection}/{vibe_key}_metadata.json",
-            )
-            
-            if not image_path or not metadata_path:
-                return None
-            
-            # Read image data
-            with open(image_path, "rb") as f:
-                image_data = f.read()
-            
-            # Read metadata
-            with open(metadata_path, "r") as f:
-                metadata = json.load(f)
-            
-            logger.info(f"Retrieved visualization from Hopsworks: {vibe_key}")
-            return image_data, metadata
-            
-        except Exception as e:
-            logger.error(f"Failed to retrieve visualization: {e}")
-            return None
+
     
     def get_headlines_for_city(
         self,

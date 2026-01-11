@@ -115,7 +115,7 @@ class CacheMetadata:
         """Convert to dictionary for JSON/DB storage."""
         return {
             "cache_key": self.cache_key,
-            "hitboxes": self.hitboxes,
+            "hitboxes": [hb.model_dump() if hasattr(hb, 'model_dump') else hb for hb in self.hitboxes],
             "created_at": self.created_at,
         }
 
