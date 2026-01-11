@@ -40,14 +40,13 @@ Each category will have a corresponding visual "sticker" or template element tha
 
 **Sentiment Extraction & Classification**:
 - Self-hosted language models fine-tuned on news sentiment classification
-- Based on state-of-the-art architectures (e.g., BERT-based or similar transformer models)
+- Based on state-of-the-art architectures (i.e., BERT)
 - Multi-label classification to assign articles to signal categories
 - Intensity scoring for each detected signal (0-100 scale)
 
 **Model Training Approach**:
 - Fine-tune existing pre-trained models rather than training from scratch
 - Focus on Swedish news corpus for localized understanding
-- Potential use of LangGraph for orchestration of multi-step classification pipeline
 
 ### Image Generation Strategy
 
@@ -175,20 +174,6 @@ The POC is considered successful when:
 
 **Risk: Computational resources for real-time processing**
 - Mitigation: 6-hour refresh window allows batch processing; aggressive caching strategy
-
-## Timeline & Milestones
-
-_To be defined by team based on availability and priorities_
-
-Suggested phases:
-1. **Data Pipeline Setup**: GDELT integration, data exploration
-2. **Model Fine-tuning**: Sentiment classification for Swedish news
-3. **Template Design**: Create visual elements for each signal category
-4. **Composition Engine**: Build system to arrange templates based on signals
-5. **API Development**: FastAPI endpoints and caching layer
-6. **Frontend Development**: Basic web interface
-7. **Integration & Testing**: End-to-end workflow validation
-8. **Demo & Iteration**: Gather feedback, refine approach
 
 ## Repository Structure
 
