@@ -56,22 +56,46 @@ class HopsworksService:
     def connect(self):
         """Establish connection to Hopsworks."""
         try:
-            connection_args = {
-                "project": self.project_name,
-                "api_key_value": self.api_key,
-            }
+            import hsfs
             
-            if self.host:
-                connection_args["host"] = self.host
-                    
-            self._project = hopsworks.login(**connection_args)
-            self._fs = self._project.get_feature_store()
-            self._dataset_api = self._project.get_dataset_api()
+            logger.info(f"Connecting to Hopsworks project: {self.project_name}")
             
-            logger.info(f"Connected to Hopsworks project: {self.project_name}")
+            # Host is required by hsfs - default to managed cloud
+            host = self.host if self.host else "c.app.hopsworks.ai"
+            
+            logger.info(f"Using host: {host}")
+            
+            # Create connection with required parameters
+            connection = hsfs.connection(
+                host=host,
+                project=self.project_name,
+                api_key_value=self.api_key,
+            )
+            
+            # Get feature store (explicitly pass project name)
+            self._fs = connection.get_feature_store(name=self.project_name)
+            logger.info(f"Connected to feature store: {self._fs.name}")
+            
+            # Try to get model registry (requires separate import)
+            try:
+                import hsml
+                self._mr = connection.get_model_registry()
+                logger.info("Model registry connected")
+            except ImportError:
+                logger.warning("hsml package not installed. Model registry features unavailable.")
+                self._mr = None
+            except Exception as e:
+                logger.warning(f"Could not access model registry: {e}")
+                self._mr = None
+            
+            logger.info(f"Successfully connected to Hopsworks project: {self.project_name}")
             
         except Exception as e:
             logger.error(f"Failed to connect to Hopsworks: {e}")
+            logger.error(f"Project: {self.project_name}")
+            logger.error(f"Host: {self.host or 'c.app.hopsworks.ai (default)'}")
+            logger.error("Make sure 'hsfs' package is installed: pip install hsfs")
+            logger.error("For managed Hopsworks, ensure your API key is valid and the project exists")
             raise
             
     def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
@@ -83,6 +107,7 @@ class HopsworksService:
         - city: string
         - timestamp: timestamp (event_time)
         - title: string
+        - description: string
         - url: string
         - source: string
         - emergencies_score: float
@@ -204,6 +229,202 @@ class HopsworksService:
         except Exception as e:
             logger.error(f"Failed to create feature group: {e}")
             raise
+
+    def get_or_create_templates_feature_group(self, fg_name: str = "signal_templates", version: int = 1):
+        """
+        Feature group for storing signal templates.
+
+        Schema:
+        - category: string(100)
+        - template: string(1000)
+        - created_at: timestamp
+        """
+        if not self._fs:
+            self.connect()
+        
+        if not self._fs:
+            raise RuntimeError("Failed to connect to Hopsworks feature store")
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            # Import pandas for schema definition
+            import pandas as pd
+            
+            # Create empty DataFrame with proper types to define schema
+            schema_df = pd.DataFrame({
+                'category': pd.Series(dtype='string'),
+                'template': pd.Series(dtype='string'),
+                'created_at': pd.Series(dtype='datetime64[ns]')
+            })
+            
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Signal templates per category",
+                primary_key=["category"],
+                event_time="created_at",
+                online_enabled=False,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def get_or_create_keywords_feature_group(self, fg_name: str = "tag_keywords", version: int = 1):
+        """
+        Feature group for storing tag keywords.
+
+        Schema:
+        - category: string(100)
+        - keyword: string(200)
+        - tag: string(100)
+        - created_at: timestamp
+        """
+        if not self._fs:
+            self.connect()
+        
+        if not self._fs:
+            raise RuntimeError("Failed to connect to Hopsworks feature store")
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            # Import pandas for schema definition
+            import pandas as pd
+            
+            # Create empty DataFrame with proper types to define schema
+            schema_df = pd.DataFrame({
+                'category': pd.Series(dtype='string'),
+                'keyword': pd.Series(dtype='string'),
+                'tag': pd.Series(dtype='string'),
+                'created_at': pd.Series(dtype='datetime64[ns]')
+            })
+            
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Tag keywords per category",
+                primary_key=["category", "keyword"],
+                event_time="created_at",
+                online_enabled=False,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def store_signal_templates(self, templates: Dict[str, List[str]], fg_name: str = "signal_templates", version: int = 1):
+        """Insert signal templates into the feature group."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_templates_feature_group(fg_name, version)
+        if fg is None:
+            raise RuntimeError(f"Failed to get or create feature group: {fg_name}")
+        
+        rows = []
+        now = datetime.utcnow()
+        for category, tmpl_list in templates.items():
+            for tmpl in tmpl_list:
+                rows.append({
+                    "category": category,
+                    "template": tmpl,
+                    "created_at": now,
+                })
+        try:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(rows)} templates into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store templates: {e}")
+            raise
+
+    def store_tag_keywords(self, keywords: Dict[str, Dict[str, str]], fg_name: str = "tag_keywords", version: int = 1):
+        """Insert tag keywords into the feature group."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_keywords_feature_group(fg_name, version)
+        if fg is None:
+            raise RuntimeError(f"Failed to get or create feature group: {fg_name}")
+        
+        rows = []
+        now = datetime.utcnow()
+        for category, kv in keywords.items():
+            for k, v in kv.items():
+                rows.append({
+                    "category": category,
+                    "keyword": k,
+                    "tag": v,
+                    "created_at": now,
+                })
+        try:
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(rows)} tag keywords into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store tag keywords: {e}")
+            raise
+
+    def get_or_create_headline_labels_feature_group(self, fg_name: str = "headline_labels", version: int = 1):
+        """
+        Feature group for storing labeled dataset rows.
+        Similar to headline_classifications but intended for training sets.
+        """
+        if not self._fs:
+            self.connect()
+
+        try:
+            fg = self._fs.get_feature_group(name=fg_name, version=version)
+            logger.info(f"Using existing feature group: {fg_name} v{version}")
+            return fg
+        except Exception:
+            logger.info(f"Feature group {fg_name} v{version} not found, creating new one")
+
+        try:
+            fg = self._fs.create_feature_group(
+                name=fg_name,
+                version=version,
+                description="Labeled dataset rows with scores/tags per category",
+                primary_key=["url"],
+                event_time="date",
+                online_enabled=False,
+            )
+            logger.info(f"Created feature group: {fg_name} v{version}")
+            return fg
+        except Exception as e:
+            logger.error(f"Failed to create feature group: {e}")
+            raise
+
+    def store_labeled_dataset(self, labeled_rows: List[Dict], fg_name: str = "headline_labels", version: int = 1):
+        """Insert labeled dataset rows into Hopsworks."""
+        if not self._fs:
+            self.connect()
+
+        fg = self.get_or_create_headline_labels_feature_group(fg_name, version)
+        try:
+            import pandas as pd
+            df = pd.DataFrame(labeled_rows)
+            fg.insert(df)
+            logger.info(f"Stored {len(labeled_rows)} labeled rows into {fg_name}")
+        except Exception as e:
+            logger.error(f"Failed to store labeled dataset: {e}")
+            raise
     
     def store_headline_classifications(
         self,
@@ -236,6 +457,7 @@ class HopsworksService:
                 "city": city,
                 "timestamp": timestamp,
                 "title": headline.get("title", ""),
+                "description": headline.get("description", ""),
                 "url": headline.get("url", ""),
                 "source": headline.get("source", ""),
             }
@@ -543,52 +765,149 @@ class HopsworksService:
             self.connect()
         
         try:
-            fg = self.get_or_create_headline_feature_group(fg_name, version)
+            dataset_api = self._project.get_dataset_api()
+            image_path = f"Resources/vibe_images/{vibe_hash}.png"
             
-            # Query for city and timestamp
-            query = fg.select_all().filter(
-                (fg.city == city) & (fg.timestamp == timestamp)
+            # Try to get file info
+            dataset_api.get(image_path)
+            return True
+            
+        except Exception:
+            return False
+
+    def register_model(
+        self,
+        model_dir: str,
+        name: str,
+        metrics: Optional[Dict] = None,
+        description: str = "",
+        version: Optional[int] = None,
+    ):
+        """
+        Register a trained model in the Hopsworks Model Registry.
+
+        Args:
+            model_dir: Local directory containing the serialized model artifacts
+            name: Model name in the registry
+            metrics: Optional evaluation metrics to log
+            description: Optional description
+            version: Optional version to set; if None, Hopsworks will auto-increment
+        """
+        if not self._mr:
+            self.connect()
+
+        try:
+            model = self._mr.python.create_model(
+                name=name,
+                metrics=metrics or {},
+                description=description,
+                version=version,
             )
-            
-            df = query.read()
-            
-            if df.empty:
-                logger.warning(f"No headlines found for {city} at {timestamp}")
-                return []
-            
-            # Convert to list of dicts with structured classifications
-            headlines = []
-            
-            for _, row in df.iterrows():
-                headline = {
-                    "article_id": row["article_id"],
-                    "title": row["title"],
-                    "url": row["url"],
-                    "source": row["source"],
-                    "classifications": {}
-                }
-                
-                # Add category scores and tags
-                for category in self.SIGNAL_CATEGORIES:
-                    score = row.get(f"{category}_score", 0.0)
-                    tag = row.get(f"{category}_tag", "")
-                    if score != 0.0 or tag:  # Only include if there's data
-                        headline["classifications"][category] = {
-                            "score": score,
-                            "tag": tag
-                        }
-                
-                headlines.append(headline)
-            
-            logger.info(f"Retrieved {len(headlines)} headlines for {city} at {timestamp}")
-            return headlines
-            
+            model.save(model_dir)
+            logger.info(f"Registered model '{name}' from {model_dir}")
+            return model
         except Exception as e:
-            logger.error(f"Failed to retrieve headlines: {e}")
-            return []
+            logger.error(f"Failed to register model '{name}': {e}")
+            raise
 
 
-def get_or_create_hopsworks_service(
+class MockHopsworksService:
+    """
+    Mock Hopsworks service for development/testing without Hopsworks credentials.
+    """
+    
+    def __init__(self, **kwargs):
+        """Initialize mock service (accepts any args for compatibility)."""
+        self.storage: Dict[str, Tuple[bytes, Dict]] = {}
+        self.vibes: Dict[str, Dict] = {}
+        self.headlines: Dict[str, List[Dict]] = {}
+        logger.info("Using MockHopsworksService")
+    
+    def connect(self):
+        """Mock connect."""
+        logger.info("Mock: Connected to Hopsworks")
+        
+    def get_or_create_headline_feature_group(self, fg_name: str = "headline_classifications", version: int = 1):
+        """Mock headline feature group getter."""
+        logger.info(f"Mock: Using headline feature group {fg_name} v{version}")
+        return None
+        
+    def get_or_create_vibe_feature_group(self, fg_name: str = "vibe_vectors", version: int = 1):
+        """Mock vibe feature group getter."""
+        logger.info(f"Mock: Using vibe feature group {fg_name} v{version}")
+        return None
+    
+    def get_or_create_templates_feature_group(self, fg_name: str = "signal_templates", version: int = 1):
+        """Mock templates feature group getter."""
+        logger.info(f"Mock: Using templates feature group {fg_name} v{version}")
+        return self
+    
+    def get_or_create_keywords_feature_group(self, fg_name: str = "tag_keywords", version: int = 1):
+        """Mock keywords feature group getter."""
+        logger.info(f"Mock: Using keywords feature group {fg_name} v{version}")
+        return self
+    
+    def get_or_create_headline_labels_feature_group(self, fg_name: str = "headline_labels", version: int = 1):
+        """Mock headline labels feature group getter."""
+        logger.info(f"Mock: Using headline labels feature group {fg_name} v{version}")
+        return self
+        
+    def store_headline_classifications(self, headlines: List[Dict], city: str, timestamp: datetime, **kwargs):
+        """Mock headline storage."""
+        key = f"{city}_{timestamp.isoformat()}"
+        self.headlines[key] = headlines
+        logger.info(f"Mock: Stored {len(headlines)} headline classifications for {city}")
+    
+    def store_signal_templates(self, templates: Dict[str, List[str]], **kwargs):
+        """Mock signal templates storage."""
+        total = sum(len(t) for t in templates.values())
+        logger.info(f"Mock: Stored {total} signal templates")
+    
+    def store_tag_keywords(self, keywords: Dict[str, Dict[str, str]], **kwargs):
+        """Mock tag keywords storage."""
+        total = sum(len(k) for k in keywords.values())
+        logger.info(f"Mock: Stored {total} tag keywords")
+    
+    def store_labeled_dataset(self, df, **kwargs):
+        """Mock labeled dataset storage."""
+        logger.info(f"Mock: Stored {len(df)} labeled headlines")
+        
+    def store_vibe_vector(self, city: str, timestamp: datetime, vibe_vector: Dict, **kwargs):
+        """Mock vibe vector storage."""
+        key = f"{city}_{timestamp.isoformat()}"
+        self.vibes[key] = vibe_vector
+        logger.info(f"Mock: Stored vibe vector for {city}")
+        
+    def get_latest_vibe_vector(self, city: str, **kwargs) -> Optional[Dict]:
+        """Mock vibe vector retrieval."""
+        # Return most recent for city
+        matching = [k for k in self.vibes.keys() if k.startswith(city)]
+        if not matching:
+            return None
+        latest_key = sorted(matching)[-1]
+        return self.vibes[latest_key]
+        
+    def store_visualization(self, vibe_hash: str, image_data: bytes, metadata: Dict):
+        """Mock visualization storage."""
+        self.storage[vibe_hash] = (image_data, metadata)
+        logger.info(f"Mock: Stored visualization {vibe_hash}")
+        
+    def get_visualization(self, vibe_hash: str) -> Optional[Tuple[bytes, Dict]]:
+        """Mock visualization retrieval."""
+        return self.storage.get(vibe_hash)
+    
+    def insert(self, df):
+        """Mock insert method (for when mock is returned as feature group)."""
+        logger.info(f"Mock: Inserted {len(df)} rows")
+        return None
+        
+    def visualization_exists(self, vibe_hash: str) -> bool:
+        """Mock visualization existence check."""
+        return vibe_hash in self.storage
+
+
+def create_hopsworks_service(
+    enabled: bool = True,
     api_key: Optional[str] = None,
     project_name: Optional[str] = None,
     host: Optional[str] = None,

@@ -25,6 +25,22 @@ from ml.ingestion.script import fetch_news
 from backend.app.services.hopsworks import get_or_create_hopsworks_service
 from backend.settings import settings
 
+# Try to import fine-tuned classifier (optional)
+try:
+    from ml.models.inference import get_fine_tuned_classifier
+    HAS_FINE_TUNED_MODEL = True
+except ImportError:
+    HAS_FINE_TUNED_MODEL = False
+
+# Try to import embedding-based labeling (optional)
+try:
+    from ml.utils.embedding_labeling import classify_article_embedding
+    HAS_EMBEDDING_LABELING = True
+except ImportError:
+    HAS_EMBEDDING_LABELING = False
+
+_fine_tuned_classifier = None
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -45,113 +61,259 @@ SIGNAL_CATEGORIES = [
     "politics",
 ]
 
+# Tag vocabulary for each category (used by ML model)
+TAG_VOCAB = {
+    "emergencies": ["", "fire", "earthquake", "explosion", "evacuation", "accident"],
+    "crime": ["", "theft", "assault", "robbery", "police", "vandalism"],
+    "festivals": ["", "concert", "celebration", "parade", "crowd", "event"],
+    "transportation": ["", "traffic", "accident", "congestion", "delay", "closure"],
+    "weather_temp": ["", "hot", "cold", "heatwave", "freeze"],
+    "weather_wet": ["", "rain", "snow", "flood", "storm", "drought"],
+    "sports": ["", "football", "hockey", "victory", "championship", "game"],
+    "economics": ["", "market", "business", "trade", "employment", "inflation"],
+    "politics": ["", "election", "protest", "government", "policy", "vote"],
+}
 
-def classify_article(title: str, description: str = "") -> Dict[str, Tuple[float, str]]:
+
+def classify_article(
+    title: str,
+    description: str = "",
+    method: str = "auto"
+) -> Dict[str, Tuple[float, str]]:
     """
     Classify a single article into signal categories.
     
-    This is a placeholder for ML model inference.
-    Replace with actual multi-head model that outputs:
-    - Score: -1.0 to 1.0 (regression)
-    - Tag: string (classification)
+    Method priority (auto mode):
+    1. Fine-tuned BERT model (if available)
+    2. Embedding-based classification (if available)
+    3. Keyword-based fallback (always available)
     
     Args:
         title: Article title
         description: Article description/body
+        method: Classification method:
+            - "auto": Try fine-tuned model, then embedding, then keywords
+            - "embedding": Use embedding-based (semantic similarity)
+            - "keywords": Use keyword matching
+            - "ml": Use fine-tuned model only, fall back to keywords if unavailable
         
     Returns:
         Dict mapping category to (score, tag) tuple
         e.g., {"emergencies": (0.8, "fire"), "crime": (0.0, "")}
     """
-    # TODO: Replace with actual ML model inference
-    # For now, use keyword-based classification
+    # Try fine-tuned model first (if method allows)
+    if method in ["auto", "ml"]:
+        global _fine_tuned_classifier
+        
+        if HAS_FINE_TUNED_MODEL:
+            try:
+                if _fine_tuned_classifier is None:
+                    _fine_tuned_classifier = get_fine_tuned_classifier()
+                
+                result = _fine_tuned_classifier.classify(title, description)
+                if result:
+                    logger.debug(f"ML Classification: {result}")
+                    return result
+            except Exception as e:
+                logger.warning(f"Fine-tuned model failed: {e}")
+                if method == "ml":
+                    # If ML method requested but failed, fall back to keywords
+                    pass
     
+    # Try embedding-based classification (if method allows and available)
+    if method in ["auto", "embedding"]:
+        if HAS_EMBEDDING_LABELING:
+            try:
+                result = classify_article_embedding(title, description)
+                if result:
+                    logger.debug(f"Embedding Classification: {result}")
+                    return result
+            except Exception as e:
+                logger.warning(f"Embedding classification failed: {e}")
+    
+    # Fallback to keyword-based classification with richer vocabularies (EN + SV)
     text = (title + " " + description).lower()
     signals = {}
-    
+
+    def has_any(keywords: List[str]) -> bool:
+        return any(kw in text for kw in keywords)
+
+    # Expanded keyword sets per category
+    KW_EMERGENCY = [
+        "fire", "brand", "eldsvåda", "blaze", "inferno", "wildfire",
+        "explosion", "explosioner", "blast", "bomb", "sprängning",
+        "earthquake", "jordbävning", "quake", "aftershock",
+        "evacuation", "evakuering", "evakueras",
+        "collapse", "ras", "kollaps", "mudslide", "jordskred",
+        "tsunami", "storm surge", "stormflod",
+    ]
+
+    KW_CRIME = [
+        "crime", "brott", "criminal", "kriminell",
+        "theft", "stöld", "robbery", "rån", "burglary", "inbrott",
+        "assault", "misshandel", "överfall", "attack",
+        "murder", "mord", "homicide", "dödsskjutning",
+        "police", "polis", "arrest", "gripen", "häktad",
+        "shooting", "skottlossning", "gunfire",
+        "vandalism", "skadegörelse",
+    ]
+
+    KW_FESTIVAL = [
+        "festival", "konsert", "concert", "gig", "spelning",
+        "celebration", "firande", "parade", "parad",
+        "crowd", "publik", "evenemang", "event", "mässa",
+        "show", "föreställning", "carnival", "karneval",
+    ]
+
+    KW_TRANSPORT = [
+        "traffic", "trafik", "kö", "congestion", "gridlock",
+        "accident", "olycka", "krasch", "crash", "collision", "kollision",
+        "delay", "försening", "försenad", "cancelled", "inställd",
+        "closure", "stängd", "avstängd", "lane closed", "vägstängning",
+        "train", "tåg", "rail", "spår", "buss", "bus", "metro", "tunnelbana",
+    ]
+
+    KW_WEATHER_TEMP = [
+        "heatwave", "värmebölja", "extreme heat", "hetta", "varmt",
+        "cold", "kallt", "freeze", "frys", "frost", "kyla",
+        "temperature", "temperatur", "record heat", "record cold",
+    ]
+
+    KW_WEATHER_WET = [
+        "rain", "regn", "rainfall", "skyfall", "cloudburst",
+        "snow", "snö", "blizzard", "snöstorm",
+        "storm", "oväder", "orkan", "hurricane",
+        "flood", "översvämning", "flooding", "stormflod",
+        "hail", "hagel",
+    ]
+
+    KW_SPORTS = [
+        "sport", "sports", "match", "game", "spel", "tävling",
+        "football", "fotboll", "soccer",
+        "hockey", "ishockey",
+        "victory", "win", "seger", "vinst", "triumf",
+        "championship", "mästerskap", "cup", "final", "guld",
+    ]
+
+    KW_ECON = [
+        "economy", "ekonomi", "market", "marknad", "börs", "stock",
+        "inflation", "recession", "lågkonjunktur",
+        "unemployment", "arbetslöshet", "jobb", "sysselsättning",
+        "growth", "tillväxt", "gdp", "bnp",
+        "trade", "handel", "export", "import",
+        "business", "företag", "investment", "investering",
+    ]
+
+    KW_POLITICS = [
+        "election", "val", "vote", "rösta", "omröstning",
+        "government", "regering", "parliament", "riksdag", "minister",
+        "policy", "lag", "lagförslag", "bill", "förordning",
+        "protest", "demonstration", "demo", "manifestation",
+        "strike", "strejk",
+    ]
+
     # Emergencies
-    if any(kw in text for kw in ["fire", "explosion", "earthquake", "evacuation", "brand", "jordbävning"]):
-        if "fire" in text or "brand" in text:
+    if has_any(KW_EMERGENCY):
+        if any(kw in text for kw in ["fire", "brand", "eldsvåda", "blaze", "wildfire"]):
             signals["emergencies"] = (0.8, "fire")
-        elif "earthquake" in text or "jordbävning" in text:
-            signals["emergencies"] = (0.7, "earthquake")
+        elif any(kw in text for kw in ["explosion", "blast", "sprängning", "bomb"]):
+            signals["emergencies"] = (0.85, "explosion")
+        elif any(kw in text for kw in ["earthquake", "jordbävning", "quake"]):
+            signals["emergencies"] = (0.75, "earthquake")
+        elif any(kw in text for kw in ["flood", "översvämning", "stormflod"]):
+            signals["emergencies"] = (0.85, "flood")
         else:
             signals["emergencies"] = (0.6, "evacuation")
-    
+
     # Crime
-    if any(kw in text for kw in ["crime", "theft", "robbery", "assault", "police", "brott", "stöld", "polis"]):
-        if "theft" in text or "robbery" in text or "stöld" in text:
+    if has_any(KW_CRIME):
+        if any(kw in text for kw in ["theft", "stöld", "robbery", "rån", "burglary", "inbrott"]):
             signals["crime"] = (0.6, "theft")
-        elif "assault" in text:
+        elif any(kw in text for kw in ["assault", "misshandel", "överfall", "attack"]):
             signals["crime"] = (0.7, "assault")
+        elif any(kw in text for kw in ["murder", "mord", "homicide", "dödsskjutning"]):
+            signals["crime"] = (0.8, "assault")
         else:
             signals["crime"] = (0.5, "police")
-    
-    # Festivals
-    if any(kw in text for kw in ["festival", "concert", "celebration", "event", "konsert", "fest", "firande"]):
-        if "concert" in text or "konsert" in text:
+
+    # Festivals / Events (tightened to reduce false positives on generic "event")
+    if has_any(KW_FESTIVAL):
+        if any(kw in text for kw in ["concert", "konsert", "gig", "spelning"]):
             signals["festivals"] = (0.7, "concert")
-        elif "celebration" in text or "firande" in text:
+        elif any(kw in text for kw in ["celebration", "firande", "parade", "parad", "carnival", "karneval"]):
             signals["festivals"] = (0.8, "celebration")
         else:
-            signals["festivals"] = (0.6, "crowd")
-    
+            signals["festivals"] = (0.6, "event")
+
     # Transportation
-    if any(kw in text for kw in ["traffic", "congestion", "accident", "crash", "trafik", "olycka", "kö"]):
-        if "traffic" in text or "congestion" in text or "trafik" in text or "kö" in text:
+    if has_any(KW_TRANSPORT):
+        if any(kw in text for kw in ["accident", "olycka", "krasch", "crash", "collision", "kollision"]):
+            severity = 0.8 if has_any(["fatal", "död", "killed", "omkom"]) else 0.7
+            signals["transportation"] = (severity, "accident")
+        elif any(kw in text for kw in ["delay", "försening", "försenad", "cancelled", "inställd"]):
+            signals["transportation"] = (0.5, "delay")
+        elif any(kw in text for kw in ["closure", "stängd", "avstängd", "lane closed", "vägstängning"]):
+            signals["transportation"] = (0.6, "closure")
+        elif any(kw in text for kw in ["traffic", "trafik", "kö", "congestion", "gridlock"]):
             signals["transportation"] = (0.6, "traffic")
-        elif "accident" in text or "crash" in text or "olycka" in text:
-            signals["transportation"] = (0.8, "accident")
-        else:
-            signals["transportation"] = (0.5, "congestion")
-    
+
     # Weather - Temperature
-    if any(kw in text for kw in ["hot", "heat", "cold", "freeze", "temperature", "varmt", "kallt", "temperatur"]):
-        if "hot" in text or "heat" in text or "varmt" in text:
-            signals["weather_temp"] = (0.7, "hot")
-        else:
+    if has_any(KW_WEATHER_TEMP):
+        if any(kw in text for kw in ["heatwave", "värmebölja", "extreme heat", "record heat"]):
+            signals["weather_temp"] = (0.75, "hot")
+        elif any(kw in text for kw in ["cold", "kallt", "freeze", "frost", "record cold"]):
             signals["weather_temp"] = (0.6, "cold")
-    
+        else:
+            signals["weather_temp"] = (0.55, "temperature")
+
     # Weather - Precipitation
-    if any(kw in text for kw in ["rain", "snow", "flood", "storm", "regn", "snö", "översvämning"]):
-        if "rain" in text or "regn" in text:
-            signals["weather_wet"] = (0.6, "rain")
-        elif "snow" in text or "snö" in text:
-            signals["weather_wet"] = (0.5, "snow")
-        elif "flood" in text or "översvämning" in text:
+    if has_any(KW_WEATHER_WET):
+        if any(kw in text for kw in ["flood", "översvämning", "stormflod"]):
             signals["weather_wet"] = (0.9, "flood")
-        else:
-            signals["weather_wet"] = (0.5, "rain")
-    
+        elif any(kw in text for kw in ["storm", "oväder", "orkan", "hurricane"]):
+            signals["weather_wet"] = (0.75, "storm")
+        elif any(kw in text for kw in ["snow", "snö", "blizzard", "snöstorm"]):
+            signals["weather_wet"] = (0.55, "snow")
+        elif any(kw in text for kw in ["rain", "regn", "rainfall", "skyfall", "cloudburst", "hail", "hagel"]):
+            signals["weather_wet"] = (0.6, "rain")
+
     # Sports
-    if any(kw in text for kw in ["sports", "game", "match", "victory", "football", "hockey", "sport", "match", "seger"]):
-        if "football" in text or "fotboll" in text:
+    if has_any(KW_SPORTS):
+        if any(kw in text for kw in ["football", "fotboll", "soccer"]):
             signals["sports"] = (0.7, "football")
-        elif "hockey" in text:
+        elif any(kw in text for kw in ["hockey", "ishockey"]):
             signals["sports"] = (0.7, "hockey")
-        elif "victory" in text or "seger" in text:
+        elif any(kw in text for kw in ["victory", "win", "seger", "vinst", "triumf"]):
             signals["sports"] = (0.8, "victory")
+        elif any(kw in text for kw in ["championship", "mästerskap", "cup", "final", "guld"]):
+            signals["sports"] = (0.8, "championship")
         else:
-            signals["sports"] = (0.6, "football")
-    
+            signals["sports"] = (0.6, "game")
+
     # Economics
-    if any(kw in text for kw in ["market", "business", "trade", "economy", "economic", "marknad", "företag", "ekonomi"]):
-        if "market" in text or "marknad" in text:
+    if has_any(KW_ECON):
+        if any(kw in text for kw in ["stock", "börs", "market", "marknad", "exchange", "aktie"]):
             signals["economics"] = (0.6, "market")
-        elif "business" in text or "företag" in text:
+        elif any(kw in text for kw in ["inflation", "recession", "lågkonjunktur"]):
+            signals["economics"] = (0.65, "inflation")
+        elif any(kw in text for kw in ["unemployment", "arbetslöshet", "jobb", "sysselsättning"]):
+            signals["economics"] = (0.6, "employment")
+        elif any(kw in text for kw in ["growth", "tillväxt", "gdp", "bnp"]):
+            signals["economics"] = (0.6, "growth")
+        else:
             signals["economics"] = (0.5, "business")
-        else:
-            signals["economics"] = (0.5, "trade")
-    
+
     # Politics
-    if any(kw in text for kw in ["politics", "election", "government", "protest", "politik", "val", "regering", "protest"]):
-        if "protest" in text:
+    if has_any(KW_POLITICS):
+        if any(kw in text for kw in ["election", "val", "vote", "rösta"]):
+            signals["politics"] = (0.8, "election")
+        elif any(kw in text for kw in ["protest", "demonstration", "demo", "manifestation", "strejk"]):
             signals["politics"] = (0.7, "protest")
-        elif "election" in text or "val" in text:
-            signals["politics"] = (0.6, "election")
+        elif any(kw in text for kw in ["government", "regering", "parliament", "riksdag", "minister"]):
+            signals["politics"] = (0.6, "government")
         else:
-            signals["politics"] = (0.5, "government")
-    
+            signals["politics"] = (0.55, "policy")
+
     return signals
 
 
@@ -283,6 +445,7 @@ def run_ingestion_pipeline(
         headlines.append({
             "article_id": article_id,
             "title": title,
+            "description": description,
             "url": url,
             "source": source,
             "classifications": classifications,

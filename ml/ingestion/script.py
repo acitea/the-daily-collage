@@ -131,6 +131,92 @@ def fetch_news(country: str = "sweden", max_articles: int = 250) -> pl.DataFrame
         raise
 
 
+def fetch_news_batched(
+    country: str = "sweden",
+    total_articles: int = 500,
+    batch_size: int = 250,
+    days_lookback: int = 30,
+    batch_delay: float = 0.5
+) -> pl.DataFrame:
+    """
+    Fetch articles in batches to overcome GDELT API's 250-article-per-request limit.
+    Makes multiple requests with different date ranges to accumulate articles.
+
+    Args:
+        country: Country name or FIPS code
+        total_articles: Total articles to collect across all batches
+        batch_size: Articles per single GDELT request (max 250)
+        days_lookback: How many days back to search
+        batch_delay: Delay in seconds between batches to avoid rate limiting
+
+    Returns:
+        pl.DataFrame: Combined articles from all batches, deduplicated by URL
+    """
+    import time
+    
+    fips_code = normalize_country_input(country)
+    batch_size = min(batch_size, 250)  # GDELT hard limit
+    num_batches = (total_articles + batch_size - 1) // batch_size
+    
+    logger.info(
+        f"Fetching {total_articles} articles from {country} in {num_batches} batches"
+    )
+    
+    all_articles = []
+    seen_urls = set()
+    
+    for batch_num in range(num_batches):
+        # Calculate date range for this batch
+        # Spread requests across the lookback period
+        offset_days = int((batch_num / num_batches) * days_lookback)
+        timespan = f"{days_lookback - offset_days}d"  # e.g., "30d", "20d", "10d"
+        
+        logger.info(f"Batch {batch_num + 1}/{num_batches}: timespan={timespan}, batch_size={batch_size}")
+        
+        try:
+            gd = GdeltDoc()
+            filters = Filters(
+                country=fips_code,
+                num_records=batch_size,
+                timespan=timespan,
+            )
+            
+            articles_pd = gd.article_search(filters)
+            
+            if articles_pd is not None and not articles_pd.empty:
+                articles_pl = pl.from_pandas(articles_pd)
+                
+                # Deduplicate by URL
+                for article in articles_pl.iter_rows(named=True):
+                    url = article.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_articles.append(article)
+                
+                logger.info(
+                    f"Batch {batch_num + 1}: Got {len(articles_pl)} articles, "
+                    f"unique so far: {len(all_articles)}"
+                )
+            else:
+                logger.warning(f"Batch {batch_num + 1}: No articles returned")
+        
+        except Exception as e:
+            logger.error(f"Batch {batch_num + 1} failed: {str(e)}")
+        
+        # Add delay between requests to avoid rate limiting
+        if batch_num < num_batches - 1:
+            time.sleep(batch_delay)
+    
+    logger.info(f"Total unique articles collected: {len(all_articles)}")
+    
+    if not all_articles:
+        logger.warning("No articles collected in batched fetch")
+        return pl.DataFrame()
+    
+    # Convert list of dicts back to DataFrame
+    return pl.DataFrame(all_articles)
+
+
 if __name__ == "__main__":
     try:
         logger.info("Starting news ingestion...")

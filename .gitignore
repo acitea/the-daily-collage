@@ -181,6 +181,24 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Project data / models / artifacts
+data/
+storage/
+ml/models/checkpoints/
+artifacts/
+logs/
+
+# Large generated files
+*.parquet
+*.pkl
+*.npz
+*.h5
+*.onnx
+*.ckpt
+*.safetensors
+*.bin
+*.pt
+
 # PyCharm
 #   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
@@ -362,7 +380,8 @@ vite.config.ts.timestamp-*
 __MACOSX/
 .AppleDouble
 .LSOverride
-Icon[]
+Icon[
+]
 
 # Thumbnails
 ._*
