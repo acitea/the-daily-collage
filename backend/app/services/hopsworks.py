@@ -476,7 +476,7 @@ class HopsworksService:
         try:
             import pandas as pd
             df = pd.DataFrame(rows)
-            fg.insert(df)
+            fg.insert(df, wait=True)
             logger.info(f"Stored {len(rows)} headline classifications for {city} at {timestamp}")
         except Exception as e:
             logger.error(f"Failed to store headline classifications: {e}")
@@ -532,7 +532,7 @@ class HopsworksService:
         try:
             import pandas as pd
             df = pd.DataFrame([row])
-            fg.insert(df)
+            fg.insert(df, wait=True)
             logger.info(f"Stored vibe vector for {city} at {timestamp}")
         except Exception as e:
             logger.error(f"Failed to store vibe vector: {e}")
