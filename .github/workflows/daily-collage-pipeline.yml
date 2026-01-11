@@ -44,16 +44,17 @@ jobs:
       STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
       ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
           sparse-checkout: |
             backend
             .github
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
+          enable-cache: true
       - name: Install dependencies
         run: uv sync --frozen
       - name: Compute date & window
@@ -92,16 +93,17 @@ jobs:
       STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
       ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
           sparse-checkout: |
             backend
             .github
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
+          enable-cache: true
       - name: Install dependencies
         run: uv sync --frozen
       - name: Classify headlines and aggregate vibe
@@ -125,16 +127,17 @@ jobs:
       STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
       ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
           sparse-checkout: |
             backend
             .github
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
+          enable-cache: true
       - name: Install dependencies
         run: uv sync --frozen
       - name: Generate or fetch visualization
