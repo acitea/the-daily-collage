@@ -14,11 +14,13 @@ Test with curl:
 """
 
 import json
-import torch
 import logging
+import shutil
+from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import modal
+import torch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ image = modal.Image.debian_slim().pip_install(
 
 # Persistent volume for model caching
 model_volume = modal.Volume.from_name("daily-collage-models", create_if_missing=True)
+CACHE_ROOT = Path("/mnt/models")
+HF_CACHE = CACHE_ROOT / "hf"
 
 app = modal.App("daily-collage-classifier", image=image)
 
@@ -82,26 +86,31 @@ def load_model(
     if _model is not None:
         return  # Already loaded
     
-    logger.info(f"Loading model {model_name} v{model_version} from Hopsworks...")
-    
+    logger.info(f"Loading model {model_name} v{model_version} (cached if available)...")
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    HF_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_dir = CACHE_ROOT / f"{model_name}_v{model_version}"
+    ckpt_path = cache_dir / "best_model.pt"
+
     # Import locally to avoid issues outside Modal environment
     import hopsworks
     from transformers import AutoTokenizer, AutoModel
     import torch.nn as nn
     
-    # Login to Hopsworks
-    project_obj = hopsworks.login(api_key_value=api_key, project=project, engine="python")
-    mr = project_obj.get_model_registry()
-    
-    # Download model
-    model_obj = mr.get_model(name=model_name, version=model_version)
-    model_dir = model_obj.download()
-    logger.info(f"Model downloaded to: {model_dir}")
+    if not ckpt_path.exists():
+        # Login to Hopsworks and download
+        project_obj = hopsworks.login(api_key_value=api_key, project=project, engine="python")
+        mr = project_obj.get_model_registry()
+        model_obj = mr.get_model(name=model_name, version=model_version)
+        model_dir = Path(model_obj.download())
+        src_ckpt = model_dir / "best_model.pt"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_ckpt, ckpt_path)
+        logger.info(f"Cached checkpoint at {ckpt_path}")
+    else:
+        logger.info(f"Using cached checkpoint at {ckpt_path}")
     
     # Load checkpoint
-    import sys
-    from pathlib import Path
-    
     # Modal doesn't have access to ml module, so use inline definition
     BASE_MODEL = "KB/bert-base-swedish-cased"
     
@@ -112,9 +121,9 @@ def load_model(
     class QuickNewsClassifier(nn.Module):
         """Minimal multi-head classifier."""
         
-        def __init__(self, base_model: str = BASE_MODEL):
+        def __init__(self, base_model: str = BASE_MODEL, cache_dir: Optional[Path] = None):
             super().__init__()
-            self.bert = AutoModel.from_pretrained(base_model)
+            self.bert = AutoModel.from_pretrained(base_model, cache_dir=str(cache_dir) if cache_dir else None)
             hidden_size = 768
             
             # Score heads (regression)
@@ -153,16 +162,15 @@ def load_model(
             return results
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt_path = Path(model_dir) / "best_model.pt"
     
     ckpt = torch.load(ckpt_path, map_location=device)
-    model = QuickNewsClassifier(BASE_MODEL)
+    model = QuickNewsClassifier(BASE_MODEL, cache_dir=HF_CACHE)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
     
     _model = model
-    _tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    _tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, cache_dir=str(HF_CACHE))
     
     logger.info("✓ Model loaded and ready for inference")
 
@@ -206,6 +214,7 @@ def predict_single(title: str, description: str = "") -> Dict[str, Dict[str, Uni
     timeout=600,
     memory=4096,
     secrets=[modal.Secret.from_name("hopsworks-credentials")],
+    volumes={"/mnt/models": model_volume},
 )
 def init_model():
     """Initialize model on container startup."""
@@ -270,6 +279,7 @@ def predict(payload: Dict) -> Dict:
     memory=4096,
     secrets=[modal.Secret.from_name("hopsworks-credentials")],
     concurrency_limit=10,
+    volumes={"/mnt/models": model_volume},
 )
 @modal.web_endpoint(method="POST")
 async def api_predict(request: dict) -> dict:
