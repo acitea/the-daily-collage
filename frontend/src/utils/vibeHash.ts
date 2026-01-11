@@ -59,8 +59,30 @@ export function generateCacheKey(city: string, timestamp: Date | string): string
 }
 
 /**
- * Get the current cache key for a city (current time).
+ * Get the most recent completed window cache key for a city.
+ * 
+ * Returns the previous window since the current window hasn't completed yet.
+ * For example, if it's 14:00 (in the 12-18 window), returns the 06-12 window.
  */
 export function getCurrentCacheKey(city: string): string {
-  return generateCacheKey(city, new Date());
+  const now = new Date();
+  const hour = now.getHours();
+  
+  // Calculate which window we're currently in
+  const currentWindowIndex = Math.floor(hour / WINDOW_DURATION_HOURS);
+  
+  // Get the previous completed window
+  const targetDate = new Date(now);
+  let targetWindowIndex = currentWindowIndex - 1;
+  
+  // If we're in the first window (00-06), get yesterday's last window (18-24)
+  if (targetWindowIndex < 0) {
+    targetDate.setDate(targetDate.getDate() - 1);
+    targetWindowIndex = 3; // 18-24 window
+  }
+  
+  // Set the time to the start of the target window
+  targetDate.setHours(targetWindowIndex * WINDOW_DURATION_HOURS, 0, 0, 0);
+  
+  return generateCacheKey(city, targetDate);
 }
