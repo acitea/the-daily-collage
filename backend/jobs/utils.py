@@ -70,11 +70,18 @@ def parse_window_str(window: str) -> tuple[int, int]:
 def build_window_datetimes(date_str: str, window_str: str) -> tuple[datetime, datetime]:
     """Construct start and end datetimes (UTC) from date and window strings."""
     try:
-        from datetime import date as _date
         d = datetime.fromisoformat(f"{date_str}T00:00:00").date()
     except Exception as exc:
         raise ValueError("Date must be in 'YYYY-MM-DD' format.") from exc
     start_hour, end_hour = parse_window_str(window_str)
     start = datetime(d.year, d.month, d.day, start_hour)
-    end = datetime(d.year, d.month, d.day, end_hour)
+    
+    # If end_hour is 24, set to midnight of next day
+    if end_hour == 24:
+        from datetime import timedelta
+        end = start + timedelta(days=1)
+        end = end.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        end = datetime(d.year, d.month, d.day, end_hour)
+    
     return start, end
