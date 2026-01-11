@@ -138,6 +138,10 @@ jobs:
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
       HOPSWORKS_HOST: ${{ secrets.HOPSWORKS_HOST || vars.HOPSWORKS_HOST }}
+      ENABLE_POLISH: ${{ vars.ENABLE_POLISH || 'false' }}
+      POLISH_PROVIDER: ${{ vars.POLISH_PROVIDER || 'mock' }}
+      REPLICATE_MODEL_ID: ${{ vars.REPLICATE_MODEL_ID }}
+      REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
       STORAGE_BACKEND: ${{ vars.STORAGE_BACKEND || 'local' }}
       STORAGE_BUCKET_NAME: ${{ vars.STORAGE_BUCKET_NAME || 'vibe-images' }}
       ASSETS_DIR: ${{ vars.ASSETS_DIR || './assets' }}
