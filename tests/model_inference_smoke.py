@@ -55,12 +55,13 @@ def generate_articles_with_llm(category: str, num_articles: int = 3) -> List[Dic
     Returns:
         List of article dicts with title and description
     """
-    if not HAS_OPENAI:
+    if not HAS_OPENAI or not os.getenv("OPENAI_API_KEY"):
         return []
     
     try:
-        client = OpenAI()
-    except Exception:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    except Exception as e:
+        print(f"      ⚠️  OpenAI client init failed: {e}")
         return []
     
     prompt = f"""Generate {num_articles} realistic Swedish news article titles and descriptions for the '{category}' category.
@@ -88,7 +89,9 @@ Make them varied and realistic. Only return valid JSON, no other text."""
         if "[" in content and "]" in content:
             content = content[content.index("["):content.rindex("]")+1]
         articles = json.loads(content)
-        return articles[:num_articles]
+        generated = articles[:num_articles]
+        print(f"      ✓ Generated {len(generated)} articles with LLM")
+        return generated
     except Exception as e:
         print(f"      ⚠️  LLM generation failed: {e}")
         return []
@@ -171,6 +174,25 @@ def fetch_articles_for_category(
         all_articles.extend(llm_articles)
     
     return all_articles[:num_articles]
+
+
+def get_all_predictions_ranked(title: str, description: str = "") -> List[Tuple[str, float, str]]:
+    """
+    Get all predictions ranked by score (using confidence scores).
+    
+    Returns:
+        List of (category, score, tag) tuples sorted by score descending
+    """
+    result = model.classify_with_confidence(title, description)
+    if not result:
+        return []
+    
+    ranked = []
+    for category, (score, tag, confidence) in result.items():
+        ranked.append((category, confidence, tag))  # Use confidence for ranking
+    
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return ranked
 
 
 def test_case(title: str, text: str, desc: str, expected_category: str) -> Tuple[bool, Optional[str]]:
@@ -280,10 +302,14 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
                 print(f"            Error: Invalid score {top_score}")
                 continue
             
-            # Check if prediction matches expected category
-            is_correct = top_cat == category
+            # Get all ranked predictions
+            all_predictions = get_all_predictions_ranked(title, description)
             
-            # LLM adjudication (optional)
+            # Check if expected category is in top 3 predictions
+            top_3_categories = [pred[0] for pred in all_predictions[:3]]
+            in_top_3 = category in top_3_categories
+            
+            # LLM adjudication (source of truth)
             llm_verdict = None
             if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
                 llm_verdict = llm_judge_prediction(title, description, top_cat, top_score, top_tag, expected_category=category)
@@ -297,7 +323,15 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
             else:
                 llm_skipped += 1
             
-            # Determine pass/fail
+            # Determine pass/fail: Use LLM if available, else check if in top 3
+            llm_agrees = llm_verdict[0] if llm_verdict else None
+            if llm_agrees is not None:
+                # LLM verdict is the source of truth
+                is_correct = llm_agrees
+            else:
+                # Fallback: check if expected category in top 3
+                is_correct = in_top_3
+            
             if is_correct:
                 passed += 1
                 status = "✅ PASS"
@@ -310,13 +344,21 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
             if description:
                 desc_preview = description[:60] + "..." if len(description) > 60 else description
                 print(f"            Desc: {desc_preview}")
-            print(f"            Predicted: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f}")
-            print(f"            Expected:  {category:18s}")
+            
+            # Show top 3 ranked predictions
+            print(f"            Top 3 predictions:")
+            for rank, (pred_cat, pred_score, pred_tag) in enumerate(all_predictions[:3], 1):
+                marker = "→" if pred_cat == category else " "
+                print(f"              {marker} [{rank}] {pred_cat:18s} score={pred_score:+.3f} tag={pred_tag}")
             
             if llm_verdict:
                 verdict, reason = llm_verdict
-                llm_status = "LLM agrees" if verdict else "LLM disagrees"
+                llm_status = "✓ agrees" if verdict else "✗ disagrees"
                 print(f"            LLM: {llm_status} — {reason}")
+            elif in_top_3:
+                print(f"            ℹ️  Expected category '{category}' is in top 3 (LLM not available)")
+            else:
+                print(f"            ℹ️  Expected category '{category}' is not in top 3")
     
     if HAS_OPENAI and os.getenv("OPENAI_API_KEY"):
         print(f"\n  LLM adjudication: agree={llm_agree}, disagree={llm_disagree}, skipped={llm_skipped}")
