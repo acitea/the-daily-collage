@@ -234,7 +234,7 @@ The classifier is trained through a multi-stage pipeline from raw articles to a 
 2. Preprocesses Swedish text (normalization, cleaning)
 3. Extracts representative phrases from category-specific articles as **SIGNAL_TEMPLATES**
 4. Collects observed keywords/tags from titles and descriptions as **TAG_KEYWORDS**
-5. Uses LLM (GPT-4o-mini) to generate additional templates/keywords ensuring comprehensive coverage
+5. Uses LLM (i.e., OpenAI API) to generate additional templates/keywords ensuring comprehensive coverage
 6. Outputs JSON files for use in classification pipeline
 
 **Usage**:
