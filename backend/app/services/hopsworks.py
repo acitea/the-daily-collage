@@ -647,17 +647,15 @@ class HopsworksService:
     
     def get_headlines_for_city(
         self,
-        city: str,
-        timestamp: datetime,
+        cache_key: str,
         fg_name: str = "headline_classifications",
         version: int = 1,
     ) -> List[Dict]:
         """
-        Retrieve individual headlines from the feature store for a city and time.
+        Retrieve individual headlines from the feature store for a cache_key.
         
         Args:
-            city: City name
-            timestamp: Time window timestamp
+            cache_key: Cache key (format: city_YYYY-MM-DD_HH-HH)
             fg_name: Feature group name
             version: Feature group version
             
@@ -668,17 +666,38 @@ class HopsworksService:
             self.connect()
         
         try:
+            # Parse cache_key to extract city and time window
+            from storage.core import VibeHash
+            
+            cache_info = VibeHash.extract_info(cache_key)
+            if not cache_info:
+                logger.error(f"Invalid cache_key format: {cache_key}")
+                return []
+            
+            city = cache_info["city"].title()
+            date = cache_info["date"]
+            window = cache_info["window"]
+            
+            # Parse window to get start and end hours (e.g., "00-06" -> 0 and 6)
+            window_start_hour, window_end_hour = map(int, window.split("-"))
+            
+            # Create timestamp range for the 6-hour window
+            timestamp_start = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+            timestamp_end = date.replace(hour=window_end_hour, minute=0, second=0, microsecond=0)
+            
             fg = self.get_or_create_headline_feature_group(fg_name, version)
             
-            # Query for city and timestamp
+            # Query for city and timestamp range
             query = fg.select_all().filter(
-                (fg.city == city) & (fg.timestamp == timestamp)
+                (Feature('city').like(city)) & 
+                (fg.timestamp >= timestamp_start) & 
+                (fg.timestamp <= timestamp_end)
             )
             
             df = query.read()
             
             if df.empty:
-                logger.warning(f"No headlines found for {city} at {timestamp}")
+                logger.warning(f"No headlines found for cache_key {cache_key} (city={city}, window={window})")
                 return []
             
             # Convert to list of dicts with structured classifications
@@ -705,7 +724,7 @@ class HopsworksService:
                 
                 headlines.append(headline)
             
-            logger.info(f"Retrieved {len(headlines)} headlines for {city} at {timestamp}")
+            logger.info(f"Retrieved {len(headlines)} headlines for cache_key {cache_key}")
             return headlines
             
         except Exception as e:
