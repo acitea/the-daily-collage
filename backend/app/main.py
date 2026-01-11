@@ -331,7 +331,7 @@ async def get_vibe(
         date = cache_info["date"]
         window = cache_info["window"]
         
-        start_datetime, _ = build_window_datetimes(date, window)
+        start_datetime, _ = build_window_datetimes(date.strftime("%Y-%m-%d"), window)
         logger.info(f"Parsed cache_key: city={city}, timestamp={start_datetime}, window={window}")
         
         # Check if we already have this in cache (unless regenerating)
