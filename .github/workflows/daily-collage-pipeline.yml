@@ -23,8 +23,8 @@ on:
         default: ""
 
 env:
-  COUNTRY: ${{ github.event.inputs.country || 'sweden' }}
-  CITY: ${{ github.event.inputs.city || 'stockholm' }}
+  COUNTRY: ${{ inputs.country || 'sweden' }}
+  CITY: ${{ inputs.city || 'stockholm' }}
   CLASSIFIER_ENDPOINT: https://terahidro2003--daily-collage-classifier-api-predict.modal.run
 
 defaults:
@@ -35,7 +35,9 @@ jobs:
   fetch-headlines:
     runs-on: ubuntu-latest
     outputs:
-      window_start: ${{ steps.window.outputs.window_start }}
+      # Map step outputs to job outputs
+      date: ${{ steps.window.outputs.date }}
+      window: ${{ steps.window.outputs.window }}
     env:
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_PROJECT: ${{ secrets.HOPSWORKS_PROJECT || vars.HOPSWORKS_PROJECT }}
@@ -59,13 +61,20 @@ jobs:
         run: uv sync --frozen
       - name: Compute date & window
         id: window
+        env:
+          # Explicitly map inputs to env vars for the Python script
+          # If triggered by schedule, these will be empty strings
+          INPUT_DATE: ${{ inputs.date }}
+          INPUT_WINDOW: ${{ inputs.window }}
         run: |
           uv run python - <<'PY'
-          from datetime import datetime
           import os
-          # If inputs provided, use them; else compute current 6h bucket
-          in_date = os.environ.get('INPUT_DATE') or ''
-          in_window = os.environ.get('INPUT_WINDOW') or ''
+          from datetime import datetime
+          
+          # Read env vars mapped from inputs
+          in_date = os.environ.get('INPUT_DATE', '').strip()
+          in_window = os.environ.get('INPUT_WINDOW', '').strip()
+          
           if in_date and in_window:
               date = in_date
               window = in_window
@@ -75,7 +84,7 @@ jobs:
               end_hour = start_hour + 6
               date = now.strftime('%Y-%m-%d')
               window = f"{start_hour:02d}-{end_hour:02d}"
-          with open("$GITHUB_OUTPUT", "a", encoding="utf-8") as fh:
+          with open(os.environ['GITHUB_OUTPUT'], "a", encoding="utf-8") as fh:
               fh.write(f"date={date}\n")
               fh.write(f"window={window}\n")
           PY
