@@ -166,6 +166,25 @@ def build_signals_from_articles(source_articles: List[Dict]) -> List[Dict]:
     
     return signals
 
+def build_window_datetimes(date_str: str, window_str: str) -> tuple[datetime, datetime]:
+        """Construct start and end datetimes (UTC) from date and window strings."""
+        try:
+            d = datetime.fromisoformat(f"{date_str}T00:00:00").date()
+        except Exception as exc:
+            raise ValueError("Date must be in 'YYYY-MM-DD' format.") from exc
+        start_hour, end_hour = map(int, window_str.split("-"))
+        start = datetime(d.year, d.month, d.day, start_hour)
+        # If end_hour is 24, set to midnight of next day
+        if end_hour == 24:
+            from datetime import timedelta
+            end = start + timedelta(days=1)
+            end = end.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            end = datetime(d.year, d.month, d.day, end_hour)
+        
+        return start, end
+
+
 @app.get("/", tags=["Health"])
 async def root():
     """Root endpoint - API health check."""
@@ -308,15 +327,12 @@ async def get_vibe(
                 detail=f"Invalid cache_key format: {cache_key}. Expected format: city_YYYY-MM-DD_HH-HH",
             )
         
-        city = cache_info["city"].title()  # Normalize to title case
+        city = cache_info["city"]  # Normalize to title case
         date = cache_info["date"]
         window = cache_info["window"]
         
-        # Reconstruct timestamp from window (use start of window)
-        window_start_hour = int(window.split("-")[0])
-        timestamp = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
-        
-        logger.info(f"Parsed cache_key: city={city}, timestamp={timestamp}, window={window}")
+        start_datetime, _ = build_window_datetimes(date, window)
+        logger.info(f"Parsed cache_key: city={city}, timestamp={start_datetime}, window={window}")
         
         # Check if we already have this in cache (unless regenerating)
         if not regenerate:
@@ -331,7 +347,7 @@ async def get_vibe(
                     hitboxes = [Hitbox(**hb) if isinstance(hb, dict) else hb for hb in hitboxes]
                 
                 # Retrieve vibe_vector and articles from Hopsworks (not stored in metadata)
-                vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
+                vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=start_datetime)
                 vibe_vector = {
                     category: score
                     for category, (score, tag, count) in vibe_data.items()
@@ -478,7 +494,7 @@ async def get_visualization_image(
                 detail=f"Invalid cache_key format: {cache_key}",
             )
         
-        city = cache_info["city"].title()
+        city = cache_info["city"]
         date = cache_info["date"]
         window = cache_info["window"]
         window_start_hour = int(window.split("-")[0])
@@ -588,7 +604,7 @@ async def get_articles_for_vibe(cache_key: str):
                 detail=f"Invalid cache_key format: {cache_key}",
             )
         
-        city = cache_info["city"].title()
+        city = cache_info["city"]
         date = cache_info["date"]
         window = cache_info["window"]
         window_start_hour = int(window.split("-")[0])

@@ -24,6 +24,12 @@ export const useCurrentVibe = (location: string) => {
       const { data } = await axios.get(
         `${API_BASE_URL}${ENDPOINTS.vibe(cacheKey)}`
       );
+      
+      // Transform relative image_url to absolute URL
+      if (data.image_url && data.image_url.startsWith('/')) {
+        data.image_url = `${API_BASE_URL}${data.image_url}`;
+      }
+      
       return data;
     },
     enabled: !!location,
@@ -50,6 +56,12 @@ export const useHistoricalVibe = (location: string, timestamp: string | null) =>
       const { data } = await axios.get(
         `${API_BASE_URL}${ENDPOINTS.vibe(cacheKey)}`
       );
+      
+      // Transform relative image_url to absolute URL
+      if (data.image_url && data.image_url.startsWith('/')) {
+        data.image_url = `${API_BASE_URL}${data.image_url}`;
+      }
+      
       return data;
     },
     enabled: !!location && !!timestamp,

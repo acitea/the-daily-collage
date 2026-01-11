@@ -674,7 +674,7 @@ class HopsworksService:
                 logger.error(f"Invalid cache_key format: {cache_key}")
                 return []
             
-            city = cache_info["city"].title()
+            city = cache_info["city"]
             date = cache_info["date"]
             window = cache_info["window"]
             
@@ -682,14 +682,15 @@ class HopsworksService:
             window_start_hour, window_end_hour = map(int, window.split("-"))
             
             # Create timestamp range for the 6-hour window
-            timestamp_start = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
-            timestamp_end = date.replace(hour=window_end_hour, minute=0, second=0, microsecond=0)
-            
+            timestamp_start: datetime = date.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+            timestamp_end: datetime = date.replace(hour=window_end_hour, minute=0, second=0, microsecond=0)
             fg = self.get_or_create_headline_feature_group(fg_name, version)
+
+            print(f"Querying headlines for city={city}, window={window}, timestamps {timestamp_start} to {timestamp_end}")
             
             # Query for city and timestamp range
             query = fg.select_all().filter(
-                (Feature('city').like(city)) & 
+                (Feature('city').like(city.lower())) &
                 (fg.timestamp >= timestamp_start) & 
                 (fg.timestamp <= timestamp_end)
             )
@@ -709,6 +710,7 @@ class HopsworksService:
                     "title": row["title"],
                     "url": row["url"],
                     "source": row["source"],
+                    "published_at": row.get("timestamp", ""),
                     "classifications": {}
                 }
                 
