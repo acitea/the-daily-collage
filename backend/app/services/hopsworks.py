@@ -8,7 +8,7 @@ Handles:
 """
 
 import logging, hopsworks
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from hopsworks.project import Project
 from hopsworks.core.dataset_api import DatasetApi
@@ -157,8 +157,9 @@ class HopsworksService:
         Get or create feature group for storing aggregated vibe vectors.
         
         Schema:
-        - city: string
-        - timestamp: timestamp
+        - city: string (partition key)
+        - window_key: string (partition key, format YYYY-MM-DD_HH-HH)
+        - timestamp: timestamp (event_time)
         - emergencies_score: float
         - emergencies_tag: string
         - emergencies_count: int
@@ -212,9 +213,9 @@ class HopsworksService:
                 name=fg_name,
                 version=version,
                 description="Aggregated vibe vectors per location and time window with frequency counts",
-                primary_key=["city", "timestamp"],
+                primary_key=["city", "window_key"],
                 event_time="timestamp",
-                online_enabled=True,
+                partition_key=["city", "window_key"],
             )
             logger.info(f"Created feature group: {fg_name} v{version}")
             return fg
@@ -505,8 +506,13 @@ class HopsworksService:
         fg = self.get_or_create_vibe_feature_group(fg_name, version)
         
         # Flatten vibe vector into row format
+
+        window_end = timestamp + timedelta(hours=6)
+        window_key = f"{timestamp:%Y-%m-%d}_{timestamp:%H}-{window_end:%H}"
+
         row = {
             "city": city,
+            "window_key": window_key,
             "timestamp": timestamp,
         }
         

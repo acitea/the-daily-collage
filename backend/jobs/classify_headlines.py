@@ -18,7 +18,7 @@ BACKEND_ROOT = CURRENT_DIR.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from jobs.utils import ensure_backend_path, parse_window_start, build_window_datetimes
+from jobs.utils import ensure_backend_path, build_window_datetimes
 
 # Ensure local imports resolve when run as a script
 ensure_backend_path()
@@ -78,7 +78,7 @@ def aggregate_weighted(headlines: List[Dict], categories: List[str]) -> Dict[str
     for headline in headlines:
         for cat, (score, tag) in headline.get("classifications", {}).items():
             # Ignore zeros to reduce noise
-            if abs(score) <= 0.0:
+            if abs(score) <= 0.1:
                 continue
             buckets.setdefault(cat, []).append((score, tag))
 
@@ -101,7 +101,7 @@ def aggregate_weighted(headlines: List[Dict], categories: List[str]) -> Dict[str
             tag_counts[tag] = tag_counts.get(tag, 0) + 1
         dominant_tag = max(tag_counts.items(), key=lambda x: x[1])[0]
 
-        if weighted_score > 0.1:
+        if abs(weighted_score) > 0.1:
             vibe_vector[cat] = (weighted_score, dominant_tag, count)
 
     return vibe_vector
@@ -110,9 +110,8 @@ def aggregate_weighted(headlines: List[Dict], categories: List[str]) -> Dict[str
 def main():
     parser = argparse.ArgumentParser(description="Classify headlines via API and aggregate vibe vector")
     parser.add_argument("--city", type=str, default="stockholm", help="City/region label used in storage")
-    parser.add_argument("--date", type=str, default=None, help="Date in YYYY-MM-DD (UTC)")
-    parser.add_argument("--window", type=str, default=None, help="6h window string in 'HH-HH' format (UTC)")
-    parser.add_argument("--window-start", type=str, default=None, help="Legacy: ISO timestamp for window start (UTC)")
+    parser.add_argument("--date", type=str, required=True, help="Date in YYYY-MM-DD (UTC)")
+    parser.add_argument("--window", type=str, required=True, help="6h window string in 'HH-HH' format (UTC)")
     parser.add_argument(
         "--endpoint",
         type=str,
@@ -126,12 +125,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.date and args.window:
-        window_start, window_end = build_window_datetimes(args.date, args.window)
-    else:
-        window_start = parse_window_start(args.window_start)
-        from datetime import timedelta
-        window_end = window_start + timedelta(hours=6)
+    window_start, window_end = build_window_datetimes(args.date, args.window)
     logger.info(f"Using window: {window_start} to {window_end}")
 
     service = get_or_create_hopsworks_service(
@@ -156,7 +150,7 @@ def main():
     classified: List[Dict] = []
     aggregator_input: List[Dict] = []
 
-    with httpx.Client(timeout=15.0) as client:
+    with httpx.Client(timeout=120.0) as client:
         for headline in headlines:
             if already_classified(headline) and not args.force:
                 aggregator_input.append(headline)
@@ -205,6 +199,8 @@ def main():
     if not vibe_vector:
         logger.warning("No classifications available to aggregate a vibe vector")
         return
+
+    logger.info(f"Aggregated vibe vector with {len(vibe_vector)} signals. \n\n{vibe_vector}")
 
     try:
         service.store_vibe_vector(
