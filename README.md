@@ -221,6 +221,207 @@ the-daily-collage/
 
 ## Getting Started
 
+### Model Training Pipeline
+
+The classifier is trained through a multi-stage pipeline from raw articles to a fine-tuned model ready for production inference.
+
+#### Stage 1: Template & Keywords Generation (`ml/utils/generate_templates.py`)
+
+**Purpose**: Create reference data for embedding-based classification
+
+**Process**:
+1. Fetches real GDELT articles per category using category-specific keywords
+2. Preprocesses Swedish text (normalization, cleaning)
+3. Extracts representative phrases from category-specific articles as **SIGNAL_TEMPLATES**
+4. Collects observed keywords/tags from titles and descriptions as **TAG_KEYWORDS**
+5. Uses LLM (GPT-4o-mini) to generate additional templates/keywords ensuring comprehensive coverage
+6. Outputs JSON files for use in classification pipeline
+
+**Usage**:
+```bash
+# Generate templates from 100 Swedish articles per category (900 total)
+python ml/utils/generate_templates.py --articles-per-category 100 --country sweden
+
+# Generate more templates per category (default 30)
+python ml/utils/generate_templates.py --articles-per-category 150 --templates-per-category 50
+
+# Search further back in time
+python ml/utils/generate_templates.py --articles-per-category 150 --days-lookback 180
+```
+
+**Output**:
+- `ml/signal_templates.json` - Templates for each signal category
+- `ml/tag_keywords.json` - Keywords associated with each tag
+
+#### Stage 2: Article Labeling (`ml/utils/label_dataset.py`)
+
+**Purpose**: Create labeled training data using embedding-based classification with optional LLM verification
+
+**Process**:
+1. Fetches articles from GDELT in batches
+2. Classifies articles using **embedding similarity** against SIGNAL_TEMPLATES
+3. Assigns (score, tag) pairs for each signal category
+4. Optionally verifies labels using LLM for quality assurance
+5. Outputs labeled parquet files with structure:
+   - `title`, `description`, `url`, `source`
+   - `emergencies_score`, `emergencies_tag`
+   - `crime_score`, `crime_tag`
+   - ... (one pair per signal category)
+
+**Usage**:
+```bash
+# Generate 500 labeled articles without LLM verification (fast)
+python ml/utils/label_dataset.py --articles 500 --country sweden
+
+# Generate 200 articles with LLM verification (slower but higher quality)
+python ml/utils/label_dataset.py --articles 200 --country sweden --llm-verify --max-llm-calls 50
+```
+
+**Output**:
+- `ml/data/labeled_articles_train.parquet` - 70% training set
+- `ml/data/labeled_articles_val.parquet` - 30% validation set
+
+#### Stage 3: Model Fine-tuning (`ml/models/quick_finetune.py`)
+
+**Purpose**: Fine-tune a Swedish BERT model on the labeled data
+
+**Architecture**:
+- **Base Model**: `KB/bert-base-swedish-cased` (Swedish-specific BERT)
+- **Multi-head Design**:
+  - 9 parallel "score heads" (regression, outputs -1.0 to 1.0 intensity)
+  - 9 parallel "tag heads" (classification, predicts which tag within category)
+- **Loss Function**: Weighted combination of regression loss (score) and classification loss (tag)
+
+**Process**:
+1. Loads labeled parquet file from Stage 2
+2. Creates PyTorch dataset with text tokenization
+3. Trains with:
+   - Batch size: 32 (GPU) / 8 (CPU)
+   - Epochs: 8
+   - Learning rate: 2e-5 with cosine annealing
+   - Early stopping based on validation loss
+4. Saves best checkpoint to `ml/models/checkpoints/best_model.pt`
+
+**Usage**:
+```bash
+# Fine-tune using labeled articles
+python ml/models/quick_finetune.py \
+  --train ml/data/labeled_articles_train.parquet \
+  --val ml/data/labeled_articles_val.parquet \
+  --output ml/models/checkpoints
+
+# Use custom output directory
+python ml/models/quick_finetune.py \
+  --train ml/data/labeled_articles_train.parquet \
+  --val ml/data/labeled_articles_val.parquet \
+  --output ./custom_checkpoints
+```
+
+**Output**:
+- `ml/models/checkpoints/best_model.pt` - Best model checkpoint with state dict
+
+#### Stage 4: Local Testing (`tests/model_inference_smoke.py`)
+
+**Purpose**: Validate model quality with real GDELT articles and LLM adjudication
+
+**Features**:
+- Tests all 9 signal categories with real or LLM-generated articles
+- Shows top 3 ranked predictions with confidence scores
+- Uses OpenAI GPT-4o-mini to verify predictions (ground truth)
+- Falls back to LLM-generated articles when GDELT fetch fails for a category
+- Provides detailed pass/fail statistics
+
+**Usage**:
+```bash
+# Run smoke test with LLM verification
+export OPENAI_API_KEY="your-key-here"
+python tests/model_inference_smoke.py
+
+# Run without OpenAI (uses top-3 ranking as fallback validation)
+python tests/model_inference_smoke.py
+```
+
+**Example Output**:
+```
+[1/3] ✅ PASS | Breaking: Major fire in Stockholm...
+      Desc: Emergency services responding to downtown fire
+      Top 3 predictions:
+        → [1] emergencies        score=+0.824 tag=fire
+          [2] crime              score=+0.312 tag=
+          [3] politics           score=+0.105 tag=
+      LLM: ✓ agrees — The article describes an emergency situation (fire)
+```
+
+#### Stage 5: Production Deployment (Modal Serverless API)
+
+**Purpose**: Deploy fine-tuned model as scalable HTTP API
+
+**Features**:
+- Serverless deployment via Modal
+- Persistent volume caching for model & HuggingFace weights
+- Returns top-ranked category with score and tag
+- Supports single or batch requests
+
+**Deployment**:
+```bash
+# Deploy to Modal
+modal deploy ml/models/serve_modal.py
+
+# Or run locally with Modal
+modal run ml/models/serve_modal.py
+```
+
+**API Usage**:
+```bash
+curl -X POST https://your-modal-endpoint.modal.run/api/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Breaking: Major fire in Stockholm",
+    "description": "Emergency services responding to downtown fire"
+  }'
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "data": {
+    "category": "emergencies",
+    "score": 0.824,
+    "tag": "fire"
+  }
+}
+```
+
+### Complete Workflow Example
+
+```bash
+# 1. Generate templates (one-time setup or refresh)
+python ml/utils/generate_templates.py --articles-per-category 100 --country sweden
+
+# 2. Label articles using templates
+python ml/utils/label_dataset.py --articles 500 --country sweden --llm-verify --max-llm-calls 100
+
+# 3. Fine-tune model on labeled data
+python ml/models/quick_finetune.py \
+  --train ml/data/labeled_articles_train.parquet \
+  --val ml/data/labeled_articles_val.parquet
+
+# 4. Test model locally
+export OPENAI_API_KEY="your-key-here"
+python tests/model_inference_smoke.py
+
+# 5. Deploy to Modal
+modal deploy ml/models/serve_modal.py
+```
+
+### Key Configuration Files
+
+- **`ml/ingestion/hopsworks_pipeline.py`**: Defines SIGNAL_CATEGORIES and TAG_VOCAB (shared across all stages)
+- **`ml/signal_templates.json`**: Generated templates (input to labeling stage)
+- **`ml/tag_keywords.json`**: Generated keywords (input to labeling stage)
+- **`ml/models/checkpoints/best_model.pt`**: Fine-tuned model checkpoint (input to inference)
+
 _To be written once initial implementation begins_
 
 Will include:
@@ -232,5 +433,5 @@ Will include:
 
 ---
 
-**Project Status**: Planning & Design Phase  
-**Last Updated**: December 11, 2025
+**Project Status**: Active Development - Model Training & Inference Complete  
+**Last Updated**: January 11, 2026
