@@ -381,8 +381,8 @@ async def get_vibe(
                 )
         
         # Not in cache or regenerating - query Hopsworks for vibe data at this timestamp
-        logger.info(f"Querying Hopsworks for vibe vector: {city} at {timestamp}")
-        vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=timestamp)
+        logger.info(f"Querying Hopsworks for vibe vector: {city} at {start_datetime}")
+        vibe_data = hopsworks_service.get_vibe_vector_at_time(city=city, timestamp=start_datetime)
         
         # Convert Hopsworks vibe data format to API format
         # Hopsworks format: {"emergencies": (0.8, "fire", 5), ...}
@@ -392,7 +392,7 @@ async def get_vibe(
             for category, (score, tag, count) in vibe_data.items()
         }
         
-        logger.info(f"Retrieved vibe vector for {city} at {timestamp}: {len(vibe_vector)} categories")
+        logger.info(f"Retrieved vibe vector for {city} at {start_datetime}: {len(vibe_vector)} categories")
         
         # Get source articles from Hopsworks (optional, may be empty)
         source_articles = []
@@ -410,7 +410,7 @@ async def get_vibe(
         image_data, metadata = viz_service.generate_or_get(
             city=city,
             vibe_vector=vibe_vector,
-            timestamp=timestamp,
+            timestamp=start_datetime,
             force_regenerate=regenerate,
         )
         
