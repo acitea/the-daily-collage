@@ -18,7 +18,6 @@ BACKEND_ROOT = CURRENT_DIR.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from storage.core import VibeHash
 from jobs.utils import (
     ensure_backend_path,
     make_article_id,
@@ -111,7 +110,7 @@ def main():
         start_dt, end_dt = build_window_datetimes(args.date, args.window)
     else:
         start_dt = parse_window_start(args.window_start)
-        end_dt = start_dt.replace(hour=start_dt.hour + VibeHash.WINDOW_DURATION_HOURS)
+        end_dt = start_dt.replace(hour=start_dt.hour + 6)
     logger.info(f"Fetching articles for range: {start_dt} to {end_dt}")
 
     try:
