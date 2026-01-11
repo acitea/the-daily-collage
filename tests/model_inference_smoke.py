@@ -44,6 +44,56 @@ CATEGORY_KEYWORDS = {
 }
 
 
+def generate_articles_with_llm(category: str, num_articles: int = 3) -> List[Dict]:
+    """
+    Use LLM to generate realistic Swedish news articles for a category.
+    
+    Args:
+        category: Signal category name
+        num_articles: Number of articles to generate
+        
+    Returns:
+        List of article dicts with title and description
+    """
+    if not HAS_OPENAI:
+        return []
+    
+    try:
+        client = OpenAI()
+    except Exception:
+        return []
+    
+    prompt = f"""Generate {num_articles} realistic Swedish news article titles and descriptions for the '{category}' category.
+
+Return strict JSON array:
+[
+  {{
+    "title": "Article title in Swedish",
+    "description": "1-2 sentence description of the article content"
+  }},
+  ...
+]
+
+Make them varied and realistic. Only return valid JSON, no other text."""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        content = response.choices[0].message.content.strip()
+        # Try to extract JSON from response (may have extra text)
+        if "[" in content and "]" in content:
+            content = content[content.index("["):content.rindex("]")+1]
+        articles = json.loads(content)
+        return articles[:num_articles]
+    except Exception as e:
+        print(f"      ⚠️  LLM generation failed: {e}")
+        return []
+
+
 def fetch_articles_for_category(
     category: str,
     country: str = "sweden",
@@ -52,6 +102,7 @@ def fetch_articles_for_category(
 ) -> List[Dict]:
     """
     Fetch GDELT articles specifically for one category using keyword filtering.
+    Falls back to LLM-generated articles if fetch fails.
     
     Args:
         category: Signal category name
@@ -60,7 +111,7 @@ def fetch_articles_for_category(
         days_lookback: How many days to search back
         
     Returns:
-        List of article dicts
+        List of article dicts with 'title' and 'description' fields
     """
     import polars as pl
     
@@ -90,12 +141,16 @@ def fetch_articles_for_category(
             if articles_pd is not None and not articles_pd.empty:
                 articles_pl = pl.from_pandas(articles_pd)
                 
-                # Deduplicate by URL
+                # Deduplicate by URL and extract title + description
                 for article in articles_pl.iter_rows(named=True):
                     url = article.get("url", "")
                     if url and url not in seen_urls:
                         seen_urls.add(url)
-                        all_articles.append(article)
+                        # Normalize article fields
+                        title = article.get("title") or article.get("segtitle") or ""
+                        description = article.get("description") or article.get("summary") or ""
+                        if title:
+                            all_articles.append({"title": title, "description": description})
                 
                 # Stop if we have enough
                 if len(all_articles) >= num_articles:
@@ -107,6 +162,13 @@ def fetch_articles_for_category(
         except Exception as e:
             print(f"      ⚠️  Failed to fetch articles for keyword '{keyword}': {e}")
             continue
+    
+    # If GDELT fetch failed or returned few articles, fall back to LLM
+    if len(all_articles) < num_articles:
+        needed = num_articles - len(all_articles)
+        print(f"      → Fetched {len(all_articles)} articles, generating {needed} with LLM...")
+        llm_articles = generate_articles_with_llm(category, num_articles=needed)
+        all_articles.extend(llm_articles)
     
     return all_articles[:num_articles]
 
@@ -174,15 +236,15 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
             continue
         
         if not articles:
-            print(f"      ⚠️  No articles found for {category}")
+            print(f"      ⚠️  No articles found for {category} (neither GDELT nor LLM)")
             errors.append(f"{category}_no_articles")
             continue
         
-        print(f"      → Fetched {len(articles)} articles")
+        print(f"      → Testing {len(articles)} articles")
         
-        for article in articles:
+        for idx, article in enumerate(articles, 1):
             title = article.get("title") or ""
-            description = article.get("description") or article.get("summary") or ""
+            description = article.get("description") or ""
             
             if not title:
                 failed += 1
@@ -190,12 +252,12 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
                 print(f"      ❌ FAIL | missing title")
                 continue
             
-            # Classify with model
+            # Classify with model, passing both title and description
             result = model.classify(title, description)
             if not result:
                 failed += 1
                 errors.append(f"{category}_empty_result")
-                print(f"      ❌ FAIL | {title[:50]}...")
+                print(f"      [{idx}/{len(articles)}] ❌ FAIL | {title[:50]}...")
                 print(f"            Error: No predictions")
                 continue
             
@@ -244,7 +306,10 @@ def run_real_news_tests(articles_per_category: int = 3, country: str = "sweden")
                 errors.append(f"{category}_wrong_prediction")
                 status = "❌ FAIL"
             
-            print(f"      {status} | {title[:50]}...")
+            print(f"      [{idx}/{len(articles)}] {status} | {title[:50]}...")
+            if description:
+                desc_preview = description[:60] + "..." if len(description) > 60 else description
+                print(f"            Desc: {desc_preview}")
             print(f"            Predicted: {top_cat:18s} sentiment={top_score:+.3f} confidence={confidence:.3f}")
             print(f"            Expected:  {category:18s}")
             
