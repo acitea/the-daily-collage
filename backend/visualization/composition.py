@@ -162,6 +162,22 @@ class HybridComposer:
 
         final_data = polished_data if polished_data else layout_data
 
+        # Ensure final image matches layout dimensions for hitbox alignment
+        try:
+            image = Image.open(io.BytesIO(final_data))
+            # Use the actual layout image size (source of hitboxes)
+            target_size = layout_image.size
+            if image.size != target_size:
+                logger.info(
+                    f"Resizing polished image from {image.size} to {target_size} to keep hitboxes aligned"
+                )
+                image = image.resize(target_size, Image.Resampling.LANCZOS)
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG")
+                final_data = buffer.getvalue()
+        except Exception as e:
+            logger.warning(f"Could not enforce final image size: {e}")
+
         return final_data, hitboxes
 
     @staticmethod

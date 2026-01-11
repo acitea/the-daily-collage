@@ -1,11 +1,10 @@
 export interface Hitbox {
   x: number;
   y: number;
-  w: number;
-  h: number;
-  category: string;
-  tag: string;
-  articles: Article[];
+  width: number;
+  height: number;
+  signal_category: string;
+  signal_tag: string;
 }
 
 export interface Article {

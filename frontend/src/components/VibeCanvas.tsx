@@ -23,25 +23,31 @@ interface VibeCanvasProps {
 
 export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCategories, onSelectCategory }: VibeCanvasProps) => {
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
   const headlinesRef = useRef<HTMLDivElement>(null);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     setImageSize({ width: img.offsetWidth, height: img.offsetHeight });
+    setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
   };
 
-  const getScaledHitbox = (hitbox: Hitbox) => {
-    if (!imageSize.width || !imageSize.height) return hitbox;
-    
-    // Assuming hitboxes are in absolute pixel coordinates from the original image
-    // If they're normalized (0-1), remove the scaling
+  // Scale hitboxes from original dimensions to rendered dimensions
+  const getScaledHitbox = (hb: Hitbox) => {
+    if (!imageSize.width || !imageSize.height || !naturalSize.width || !naturalSize.height) {
+      return hb;
+    }
+
+    const scaleX = imageSize.width / naturalSize.width;
+    const scaleY = imageSize.height / naturalSize.height;
+
     return {
-      ...hitbox,
-      x: hitbox.x,
-      y: hitbox.y,
-      w: hitbox.w,
-      h: hitbox.h,
+      ...hb,
+      x: hb.x * scaleX,
+      y: hb.y * scaleY,
+      width: hb.width * scaleX,
+      height: hb.height * scaleY,
     };
   };
 
@@ -67,7 +73,7 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
             alt={alt}
             className="absolute top-0 left-0 w-full h-auto pointer-events-none"
             style={{
-              clipPath: getClipPathForCategory(hoveredCategory, hitboxes, imageSize),
+              clipPath: getClipPathForCategory(hoveredCategory, hitboxes, imageSize, naturalSize),
               transition: 'clip-path 200ms ease-out',
             }}
           />
@@ -81,7 +87,7 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
             alt={alt}
             className="absolute top-0 left-0 w-full h-auto pointer-events-none"
             style={{
-              clipPath: getClipPathForCategory(category, hitboxes, imageSize),
+              clipPath: getClipPathForCategory(category, hitboxes, imageSize, naturalSize),
               transition: 'clip-path 200ms ease-out',
             }}
           />
@@ -89,10 +95,11 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
         
         {imageSize.width > 0 && hitboxes.map((hitbox, idx) => {
           const scaled = getScaledHitbox(hitbox);
-          const isHovered = hoveredCategory === hitbox.category;
-          const isSelected = selectedCategories.has(hitbox.category);
+          const category = scaled.signal_category;
+          const isHovered = hoveredCategory === category;
+          const isSelected = selectedCategories.has(category);
           const isRelevant = isHovered || isSelected;
-          const categoryColor = CATEGORY_COLORS[hitbox.category] || '#e5e7eb';
+          const categoryColor = CATEGORY_COLORS[category] || '#e5e7eb';
           
           return (
             <div
@@ -101,13 +108,13 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
               style={{
                 left: `${scaled.x}px`,
                 top: `${scaled.y}px`,
-                width: `${scaled.w}px`,
-                height: `${scaled.h}px`,
+                width: `${scaled.width}px`,
+                height: `${scaled.height}px`,
               }}
-              onMouseEnter={() => setHoveredCategory(hitbox.category)}
+              onMouseEnter={() => setHoveredCategory(category)}
               onMouseLeave={() => setHoveredCategory(null)}
               onClick={() => {
-                onSelectCategory(hitbox.category);
+                onSelectCategory(category);
                 // Smooth scroll to headlines
                 setTimeout(() => {
                   headlinesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -130,7 +137,7 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
                   className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 text-white px-3 py-1 rounded text-sm font-semibold whitespace-nowrap z-10 pointer-events-none"
                   style={{ backgroundColor: categoryColor }}
                 >
-                  {hitbox.category}
+                  {category}
                 </div>
               )}
             </div>
@@ -145,19 +152,25 @@ export const VibeCanvas = ({ imageUrl, hitboxes, alt = 'City Vibe', selectedCate
 }
 
 // Helper function to generate clip-path for a single category
-function getClipPathForCategory(category: string, hitboxes: Hitbox[], imageSize: { width: number; height: number }): string {
-  if (!imageSize.width || !imageSize.height) return 'none';
+function getClipPathForCategory(
+  category: string,
+  hitboxes: Hitbox[],
+  imageSize: { width: number; height: number },
+  naturalSize: { width: number; height: number },
+): string {
+  if (!imageSize.width || !imageSize.height || !naturalSize.width || !naturalSize.height) return 'none';
   
-  const relevantHitboxes = hitboxes.filter((h) => h.category === category);
+  const relevantHitboxes = hitboxes.filter((h) => h.signal_category === category);
   if (relevantHitboxes.length === 0) return 'none';
   
   // Create polygon points for all hitboxes of this category
   const points = relevantHitboxes
     .map((h) => {
-      const xPercent = (h.x / imageSize.width) * 100;
-      const yPercent = (h.y / imageSize.height) * 100;
-      const wPercent = (h.w / imageSize.width) * 100;
-      const hPercent = (h.h / imageSize.height) * 100;
+      // Use natural size for ratios so percentages remain correct after scaling
+      const xPercent = (h.x / naturalSize.width) * 100;
+      const yPercent = (h.y / naturalSize.height) * 100;
+      const wPercent = (h.width / naturalSize.width) * 100;
+      const hPercent = (h.height / naturalSize.height) * 100;
       
       return `${xPercent.toFixed(2)}% ${yPercent.toFixed(2)}%, ${(xPercent + wPercent).toFixed(2)}% ${yPercent.toFixed(2)}%, ${(xPercent + wPercent).toFixed(2)}% ${(yPercent + hPercent).toFixed(2)}%, ${xPercent.toFixed(2)}% ${(yPercent + hPercent).toFixed(2)}%`;
     })
