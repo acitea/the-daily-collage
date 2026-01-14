@@ -142,6 +142,10 @@ the-daily-collage/
 
 The classifier is trained through a multi-stage pipeline from raw articles to a fine-tuned model ready for production inference.
 
+### Training Architecture
+<img width="4651" height="2221" alt="image" src="https://github.com/user-attachments/assets/c204e37c-ae54-4955-b12f-e28a36f38942" />
+
+
   
 
 #### Stage 1: Template & Keywords Generation (`ml/utils/generate_templates.py`)
