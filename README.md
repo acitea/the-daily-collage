@@ -1,4 +1,3 @@
-
 # The Daily Collage
 
 A proof-of-concept system that transforms Swedish news articles into a single, cartoonish visualization that captures the collective "vibe" of what's currently happening in that area.
@@ -10,6 +9,8 @@ A proof-of-concept system that transforms Swedish news articles into a single, c
 **Geographic Scope**: Primarily targeting Sweden and Swedish cities (e.g., Stockholm, Gothenburg, Malmö).
 
 **Update Frequency**: Visualizations refresh every 6 hours to capture emerging "hot" news.
+
+**Visit the Website**: [The Daily Collage](https://acitea.github.io/the-daily-collage/)
 
 ## Technical Architecture
 
@@ -86,9 +87,11 @@ Each category will have a corresponding visual "sticker" or template element tha
 
 ## Data Flow
 
+<img width="1222" height="359" alt="Job Pipeline + Image Generation Strategy" src="https://github.com/user-attachments/assets/eb41bd13-c2f0-41da-91ae-83e05836e52c" />
+
 1. **Ingestion** (every 6 hours):
    - Query GDELT API for news articles matching geographic filters & time window
-   - Store raw articles in processing queue
+   - Store raw articles in processing quexeue
 
 2. **Processing**:
    - Run through fine-tuned sentiment classification model
@@ -146,28 +149,18 @@ The classifier is trained through a multi-stage pipeline from raw articles to a 
 <img width="4651" height="2221" alt="image" src="https://github.com/user-attachments/assets/c204e37c-ae54-4955-b12f-e28a36f38942" />
 
 
-  
-
 #### Stage 1: Template & Keywords Generation (`ml/utils/generate_templates.py`)
-
   
 
 **Purpose**: Create reference data for embedding-based classification
 
-  
-
 **Process**:
 
 1. Fetches real GDELT articles per category using category-specific keywords
-
 2. Preprocesses Swedish text (normalization, cleaning)
-
 3. Extracts representative phrases from category-specific articles as **SIGNAL_TEMPLATES**
-
 4. Collects observed keywords/tags from titles and descriptions as **TAG_KEYWORDS**
-
 5. Uses LLM (i.e., OpenAI API) to generate additional templates/keywords ensuring comprehensive coverage
-
 6. Outputs JSON files for use in classification pipeline
 
   
@@ -175,21 +168,13 @@ The classifier is trained through a multi-stage pipeline from raw articles to a 
 **Usage**:
 
 ```bash
-
 # Generate templates from 100 Swedish articles per category (900 total)
-
 python  ml/utils/generate_templates.py  --articles-per-category  100  --country  sweden
 
-  
-
 # Generate more templates per category (default 30)
-
 python  ml/utils/generate_templates.py  --articles-per-category  150  --templates-per-category  50
 
-  
-
 # Search further back in time
-
 python  ml/utils/generate_templates.py  --articles-per-category  150  --days-lookback  180
 
 ```
@@ -199,14 +184,11 @@ python  ml/utils/generate_templates.py  --articles-per-category  150  --days-loo
 **Output**:
 
 -  `ml/signal_templates.json` - Templates for each signal category
-
 -  `ml/tag_keywords.json` - Keywords associated with each tag
-
   
 
 #### Stage 2: Article Labeling (`ml/utils/label_dataset.py`)
 
-  
 
 **Purpose**: Create labeled training data using embedding-based classification with optional LLM verification
 
@@ -215,21 +197,13 @@ python  ml/utils/generate_templates.py  --articles-per-category  150  --days-loo
 **Process**:
 
 1. Fetches articles from GDELT in batches
-
 2. Classifies articles using **embedding similarity** against SIGNAL_TEMPLATES
-
 3. Assigns (score*, tag**) pairs for each signal category
-
 4. Optionally verifies labels using LLM for quality assurance
-
 5. Outputs labeled parquet files with structure:
-
 -  `title`, `description`, `url`, `source`
-
 -  `emergencies_score`, `emergencies_tag`
-
 -  `crime_score`, `crime_tag`
-
 - ... (one pair per signal category)
 
 **by score we mean the intensity score of individual news article, not the confidence score. Although those two are closely related in our implementation, as we assume that the more negative/positive the news article is the more likely it is that it belongs to a specific news category (e.g., `emergency` with score of -0.732 is negative news with high confidence it being an emergency, while the model would classify the same article also as `sports` category but with score of `+0.00145` which can be interpreted as unlikely of being part of that category.*
@@ -240,31 +214,23 @@ python  ml/utils/generate_templates.py  --articles-per-category  150  --days-loo
 **Usage**:
 
 ```bash
-
 # Generate 500 labeled articles without LLM verification (fast)
-
 python  ml/utils/label_dataset.py  --articles  500  --country  sweden
 
-  
-
 # Generate 200 articles with LLM verification (slower but higher quality)
-
 python  ml/utils/label_dataset.py  --articles  200  --country  sweden  --llm-verify  --max-llm-calls  50
 
 ```
 
-  
+
 
 **Output**:
 
 -  `ml/data/labeled_articles_train.parquet` - 70% training set
-
 -  `ml/data/labeled_articles_val.parquet` - 30% validation set
-
   
 
 #### Stage 3: Model Fine-tuning (`ml/models/quick_finetune.py`)
-
   
 
 **Purpose**: Fine-tune a Swedish BERT model on the labeled data
@@ -274,15 +240,10 @@ python  ml/utils/label_dataset.py  --articles  200  --country  sweden  --llm-ver
 **Architecture**:
 
 -  **Base Model**: `KB/bert-base-swedish-cased` (Swedish-specific BERT)
-
 -  **Multi-head Design**:
-
 - 9 parallel "score heads" (regression, outputs -1.0 to 1.0 intensity)
-
 - 9 parallel "tag heads" (classification, predicts which tag within category)
-
 -  **Loss Function**: Weighted combination of regression loss (score) and classification loss (tag)
-
   
 
 **Process**:
@@ -292,43 +253,26 @@ python  ml/utils/label_dataset.py  --articles  200  --country  sweden  --llm-ver
 2. Creates PyTorch dataset with text tokenization
 
 3. Trains with:
-
 - Batch size: 32 (GPU) / 8 (CPU)
-
 - Epochs: 8
-
 - Learning rate: 2e-5 with cosine annealing
-
 - Early stopping based on validation loss
 
 4. Saves best checkpoint to `ml/models/checkpoints/best_model.pt`
 
-  
-
 **Usage**:
 
 ```bash
-
 # Fine-tune using labeled articles
-
 python  ml/models/quick_finetune.py \
-
 --train ml/data/labeled_articles_train.parquet \
-
 --val  ml/data/labeled_articles_val.parquet \
-
 --output ml/models/checkpoints
 
-  
-
 # Use custom output directory
-
 python  ml/models/quick_finetune.py \
-
 --train ml/data/labeled_articles_train.parquet \
-
 --val  ml/data/labeled_articles_val.parquet \
-
 --output ./custom_checkpoints
 
 ```
@@ -340,151 +284,96 @@ python  ml/models/quick_finetune.py \
 -  `ml/models/checkpoints/best_model.pt` - Best model checkpoint with state dict
 
   
-
 #### Stage 4: Local Testing (`tests/model_inference_smoke.py`)
-
   
 
 **Purpose**: Validate model quality with real GDELT articles and LLM adjudication
 
-  
-
 **Features**:
 
 - Tests all 9 signal categories with real or LLM-generated articles
-
 - Shows top 3 ranked predictions with confidence scores
-
 - Uses OpenAI GPT-4o-mini to verify predictions (ground truth)
-
 - Falls back to LLM-generated articles when GDELT fetch fails for a category
-
 - Provides detailed pass/fail statistics
 
-  
 
 **Usage**:
 
 ```bash
-
 # Run smoke test with LLM verification
-
 export OPENAI_API_KEY="your-key-here"
-
 python  tests/model_inference_smoke.py
 
-  
-
 # Run without OpenAI (uses top-3 ranking as fallback validation)
-
 python  tests/model_inference_smoke.py
 
 ```
-
   
 
 **Example Output**:
 
 ```
-
 [1/3] ✅ PASS | Breaking: Major fire in Stockholm...
 
 Desc: Emergency services responding to downtown fire
 
 Top 3 predictions:
-
 → [1] emergencies score=+0.824 tag=fire
-
 [2] crime score=+0.312 tag=
-
 [3] politics score=+0.105 tag=
-
 LLM: ✓ agrees — The article describes an emergency situation (fire)
-
 ```
-
   
 
 #### Stage 5: Production Deployment (Modal Serverless API)
 
-  
-
 **Purpose**: Deploy fine-tuned model as scalable HTTP API
-
-  
 
 **Features**:
 
 - Serverless deployment via Modal
-
 - Persistent volume caching for model & HuggingFace weights
-
 - Returns top-ranked category with score and tag
-
 - Supports single or batch requests
 
   
-
 **Deployment**:
 
 ```bash
-
 # Deploy to Modal
-
 modal  deploy  ml/models/serve_modal.py
 
-  
-
 # Or run locally with Modal
-
 modal  run  ml/models/serve_modal.py
-
 ```
-
   
 
 **API Usage**:
 
 ```bash
-
 curl  -X  POST  https://your-modal-endpoint.modal.run/api/predict \
-
 -H "Content-Type: application/json" \
-
 -d  '{
-
 "title": "Breaking: Major fire in Stockholm",
-
 "description": "Emergency services responding to downtown fire"
-
 }'
-
 ```
 
   
-
 **Response**:
 
 ```json
-
 {
-
 "status": "success",
-
 "data": {
-
 "category": "emergencies",
-
 "score": 0.824,
-
 "tag": "fire"
-
 }
-
 }
 
 ```
-
   
 
 ### Complete Workflow Example
@@ -492,41 +381,23 @@ curl  -X  POST  https://your-modal-endpoint.modal.run/api/predict \
   
 
 ```bash
-
 # 1. Generate templates (one-time setup or refresh)
-
 python  ml/utils/generate_templates.py  --articles-per-category  100  --country  sweden
 
-  
-
 # 2. Label articles using templates
-
 python  ml/utils/label_dataset.py  --articles  500  --country  sweden  --llm-verify  --max-llm-calls  100
 
-  
-
 # 3. Fine-tune model on labeled data
-
 python  ml/models/quick_finetune.py \
-
 --train ml/data/labeled_articles_train.parquet \
-
 --val  ml/data/labeled_articles_val.parquet
 
-  
-
 # 4. Test model locally
-
 export OPENAI_API_KEY="your-key-here"
-
 python  tests/model_inference_smoke.py
 
-  
-
 # 5. Deploy to Modal
-
 modal  deploy  ml/models/serve_modal.py
-
 ```
 
   
@@ -546,4 +417,4 @@ modal  deploy  ml/models/serve_modal.py
 ---
 
  
-**Last Updated**: January 11, 2026
+**Last Updated**: January 14, 2026
